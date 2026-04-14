@@ -104,6 +104,7 @@ def _load_img_as_tensor(img_path, image_size):
 class AsyncVideoFrameLoader:
     """
     A list of video frames to be load asynchronously without blocking session start.
+    Supports Input Streaming: only keeps a limited number of frames in memory (LRU eviction).
     """
 
     def __init__(
@@ -114,14 +115,18 @@ class AsyncVideoFrameLoader:
         img_mean,
         img_std,
         compute_device,
+        max_cache_frames=10,
     ):
         self.img_paths = img_paths
         self.image_size = image_size
         self.offload_video_to_cpu = offload_video_to_cpu
         self.img_mean = img_mean
         self.img_std = img_std
+        self.max_cache_frames = max_cache_frames
         # items in `self.images` will be loaded asynchronously
         self.images = [None] * len(img_paths)
+        # Track loading order for LRU eviction
+        self.loaded_indices = []
         # catch and raise any exceptions in the async loading thread
         self.exception = None
         # video_height and video_width be filled when loading the first image
@@ -133,10 +138,12 @@ class AsyncVideoFrameLoader:
         # to cache it (since it's most likely where the user will click)
         self.__getitem__(0)
 
-        # load the rest of frames asynchronously without blocking the session start
+        # load frames in range [1, max_cache_frames] asynchronously
+        # Remaining frames will be loaded on-demand to save memory
+        num_init_frames = min(max_cache_frames, len(self.img_paths))
         def _load_frames():
             try:
-                for n in tqdm(range(len(self.images)), desc="frame loading (JPEG)"):
+                for n in tqdm(range(1, num_init_frames), desc="frame loading (JPEG)"):
                     self.__getitem__(n)
             except Exception as e:
                 self.exception = e
@@ -150,7 +157,15 @@ class AsyncVideoFrameLoader:
 
         img = self.images[index]
         if img is not None:
+            # Move accessed frame to end of LRU list (most recently used)
+            if index in self.loaded_indices:
+                self.loaded_indices.remove(index)
+            self.loaded_indices.append(index)
             return img
+
+        # LRU Eviction: if we're at max capacity, evict the oldest frame
+        if len(self.loaded_indices) >= self.max_cache_frames:
+            self._evict_oldest_frame()
 
         img, video_height, video_width = _load_img_as_tensor(
             self.img_paths[index], self.image_size
@@ -163,7 +178,34 @@ class AsyncVideoFrameLoader:
         if not self.offload_video_to_cpu:
             img = img.to(self.compute_device, non_blocking=True)
         self.images[index] = img
+        self.loaded_indices.append(index)
         return img
+
+    def _evict_oldest_frame(self):
+        """Evict the oldest (least recently used) frame to free memory."""
+        if not self.loaded_indices:
+            return
+        oldest_idx = self.loaded_indices.pop(0)
+        self.images[oldest_idx] = None
+
+    def evict_old_frames(self, keep_start, keep_end):
+        """
+        Evict all frames outside the keep range [keep_start, keep_end).
+        Called by release_old_frames() in the predictor.
+        """
+        for i in range(len(self.images)):
+            if i < keep_start or i >= keep_end:
+                if self.images[i] is not None:
+                    self.images[i] = None
+                    if i in self.loaded_indices:
+                        self.loaded_indices.remove(i)
+
+    def set_max_cache(self, max_frames):
+        """Update the maximum number of frames to cache."""
+        self.max_cache_frames = max_frames
+        # Evict if currently over the new limit
+        while len(self.loaded_indices) > self.max_cache_frames:
+            self._evict_oldest_frame()
 
     def __len__(self):
         return len(self.images)
@@ -177,10 +219,15 @@ def load_video_frames(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
+    max_cache_frames=10,
 ):
     """
     Load the video frames from video_path. The frames are resized to image_size as in
     the model and are loaded to GPU if offload_video_to_cpu=False. This is used by the demo.
+    
+    Args:
+        max_cache_frames: Maximum number of frames to keep in RAM for Input Streaming.
+                          Only applies to JPEG folder loading with async_loading_frames=True.
     """
     is_bytes = isinstance(video_path, bytes)
     is_str = isinstance(video_path, str)
@@ -203,6 +250,7 @@ def load_video_frames(
             img_std=img_std,
             async_loading_frames=async_loading_frames,
             compute_device=compute_device,
+            max_cache_frames=max_cache_frames,
         )
     else:
         raise NotImplementedError(
@@ -218,6 +266,7 @@ def load_video_frames_from_jpg_images(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
+    max_cache_frames=10,
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -226,6 +275,10 @@ def load_video_frames_from_jpg_images(
     `offload_video_to_cpu` is `False` and to CPU if `offload_video_to_cpu` is `True`.
 
     You can load a frame asynchronously by setting `async_loading_frames` to `True`.
+    
+    Args:
+        max_cache_frames: Maximum number of frames to keep in RAM for Input Streaming.
+                          Only applies when async_loading_frames=True.
     """
     if isinstance(video_path, str) and os.path.isdir(video_path):
         jpg_folder = video_path
@@ -261,6 +314,7 @@ def load_video_frames_from_jpg_images(
             img_mean,
             img_std,
             compute_device,
+            max_cache_frames=max_cache_frames,
         )
         return lazy_images, lazy_images.video_height, lazy_images.video_width
 

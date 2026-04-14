@@ -595,6 +595,9 @@ class SAM2VideoPredictor(SAM2Base):
         Giải phóng tensor nặng của frame outputs cũ để giảm GPU memory.
         Giữ lại scores (best_iou_score, object_score_logits, kf_score, obj_ptr)
         để memory selection logic trong sam2_base.py vẫn hoạt động.
+        
+        Nếu inference_state["images"] là AsyncVideoFrameLoader, cũng giải phóng
+        các frame images cũ khỏi RAM (Input Streaming).
         """
         output_dict = inference_state["output_dict"]
         cond_outputs = output_dict["cond_frame_outputs"]
@@ -647,6 +650,14 @@ class SAM2VideoPredictor(SAM2Base):
         for frame_idx in list(inference_state["cached_features"].keys()):
             if frame_idx < oldest_allowed_idx:
                 del inference_state["cached_features"][frame_idx]
+
+        # Input Streaming: Evict old frames from AsyncVideoFrameLoader if available
+        images_container = inference_state["images"]
+        if hasattr(images_container, 'evict_old_frames'):
+            # Keep frames within [oldest_allowed_idx - keep_window, newest_cond + keep_window]
+            keep_start = max(0, oldest_allowed_idx - keep_window)
+            keep_end = newest_cond + keep_window + 1
+            images_container.evict_old_frames(keep_start, keep_end)
 
         gc.collect()
 
@@ -978,7 +989,14 @@ class SAM2VideoPredictor(SAM2Base):
         if backbone_out is None:
             # Cache miss -- we will run inference on a single image
             device = inference_state["device"]
-            image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
+            images_container = inference_state["images"]
+            # Support both list (original) and AsyncVideoFrameLoader (streaming)
+            if hasattr(images_container, '__getitem__'):
+                # AsyncVideoFrameLoader: load frame on-demand (may trigger eviction)
+                image = images_container[frame_idx].to(device).float().unsqueeze(0)
+            else:
+                # Original list: direct indexing
+                image = images_container[frame_idx].to(device).float().unsqueeze(0)
             backbone_out = self.forward_image(image)
             # Cache the most recent frame's feature (for repeated interactions with
             # a frame; we can use an LRU cache for more frames in the future).
