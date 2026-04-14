@@ -663,14 +663,30 @@ class SAM2Base(torch.nn.Module):
             if self.samurai_mode:
                 valid_indices = [] 
                 if frame_idx > 1:  # Ensure we have previous frames to evaluate
+                    non_cond_outputs = output_dict["non_cond_frame_outputs"]
                     for i in range(frame_idx - 1, 1, -1):  # Iterate backwards through previous frames
-                        iou_score = output_dict["non_cond_frame_outputs"][i]["best_iou_score"]  # Get mask affinity score
-                        obj_score = output_dict["non_cond_frame_outputs"][i]["object_score_logits"]  # Get object score
-                        kf_score = output_dict["non_cond_frame_outputs"][i]["kf_score"] if "kf_score" in output_dict["non_cond_frame_outputs"][i] else None  # Get motion score if available
+                        # Check if frame exists in non_cond_frame_outputs
+                        if i not in non_cond_outputs:
+                            continue
+                        frame_data = non_cond_outputs[i]
+                        # Safely get score tensors with None check
+                        iou_score = frame_data.get("best_iou_score")
+                        obj_score = frame_data.get("object_score_logits")
+                        kf_score = frame_data.get("kf_score")
+                        # Skip if required scores are None (released or missing)
+                        if iou_score is None or obj_score is None:
+                            continue
+                        # Check if scores meet criteria for valid memory
+                        try:
+                            iou_val = iou_score.item()
+                            obj_val = obj_score.item()
+                            kf_val = kf_score.item() if kf_score is not None else None
+                        except (AttributeError, RuntimeError):
+                            continue
                         # Check if the scores meet the criteria for being a valid index
-                        if iou_score.item() > self.memory_bank_iou_threshold and \
-                           obj_score.item() > self.memory_bank_obj_score_threshold and \
-                           (kf_score is None or kf_score.item() > self.memory_bank_kf_score_threshold):
+                        if iou_val > self.memory_bank_iou_threshold and \
+                           obj_val > self.memory_bank_obj_score_threshold and \
+                           (kf_val is None or kf_val > self.memory_bank_kf_score_threshold):
                             valid_indices.insert(0, i)  
                         # Check the number of valid indices
                         if len(valid_indices) >= self.max_obj_ptrs_in_encoder - 1:  

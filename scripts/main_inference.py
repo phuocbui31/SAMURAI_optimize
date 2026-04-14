@@ -34,15 +34,22 @@ parser.add_argument("--keep_window", type=int, default=10,
 parser.add_argument("--model_name", type=str, default="base_plus",
                     choices=["base_plus", "small", "tiny"],
                     help="Model size (mặc định: base_plus)")
+parser.add_argument("--data_root", type=str, default="data/LaSOT",
+                    help="Thư mục gốc chứa data (mặc định: data/LaSOT)")
+parser.add_argument("--testing_set", type=str, default=None,
+                    help="Đường dẫn file chứa danh sách video test. Nếu không chỉ định, sẽ dùng {data_root}/testing_set.txt")
 args = parser.parse_args()
 
 color = [
     (255, 0, 0),
 ]
 
-testing_set = "data/LaSOT/testing_set.txt"
-with open(testing_set, 'r') as f:
-    test_videos = f.readlines()
+# Xác định đường dẫn data từ argument
+data_root = args.data_root
+testing_set_path = args.testing_set if args.testing_set else osp.join(data_root, "testing_set.txt")
+
+with open(testing_set_path, 'r') as f:
+    test_videos = [line for line in f.readlines() if line.strip()]
 
 exp_name = "samurai"
 model_name = args.model_name
@@ -53,7 +60,7 @@ if model_name == "base_plus":
 else:
     model_cfg = f"configs/samurai/sam2.1_hiera_{model_name[0]}.yaml"
 
-video_folder= "data/LaSOT"
+video_folder = data_root
 pred_folder = f"results/{exp_name}/{exp_name}_{model_name}"
 
 save_to_video = True
