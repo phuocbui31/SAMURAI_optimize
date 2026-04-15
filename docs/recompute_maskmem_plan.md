@@ -86,122 +86,22 @@ Dùng maskmem mới cho tracking
 
 ## [Implementation Order]
 
-### Step 1: Thêm _recompute_maskmem_for_frame() trong sam2_video_predictor.py
+### ✅ Step 1: Thêm _recompute_maskmem_for_frame() trong sam2_video_predictor.py - ĐÃ XONG
 
-**Logic:**
-```python
-def _recompute_maskmem_for_frame(self, inference_state, frame_idx):
-    # 1. Load image từ container (reload từ đĩa nếu cần)
-    images_container = inference_state["images"]
-    image = images_container[frame_idx]  # Tự động reload nếu evict
-    
-    # 2. Get pred_mask từ output_dict (vẫn còn!)
-    output_dict = inference_state["output_dict"]
-    frame_entry = output_dict["non_cond_frame_outputs"].get(frame_idx)
-    if frame_entry is None:
-        frame_entry = output_dict["cond_frame_outputs"].get(frame_idx)
-    
-    # 3. Chuyển pred_mask về GPU nếu đang ở CPU (offload)
-    device = inference_state["device"]
-    pred_mask = frame_entry["pred_masks"]
-    if pred_mask.device != device:
-        pred_mask = pred_mask.to(device)
-    
-    object_score_logits = frame_entry["object_score_logits"]
-    if object_score_logits.device != device:
-        object_score_logits = object_score_logits.to(device)
-    
-    # 4. Get backbone features cho frame
-    # Gọi _get_image_feature để lấy vision features
-    _, _, current_vision_feats, _, feat_sizes = self._get_image_feature(
-        inference_state, frame_idx, batch_size=1
-    )
-    
-    # 5. Resize pred_mask lên high resolution nếu cần
-    high_res_masks = torch.nn.functional.interpolate(
-        pred_mask,
-        size=(self.image_size, self.image_size),
-        mode="bilinear",
-        align_corners=False,
-    )
-    
-    # 6. Run Memory Encoder
-    maskmem_features, maskmem_pos_enc = self._encode_new_memory(
-        current_vision_feats=current_vision_feats,
-        feat_sizes=feat_sizes,
-        pred_masks_high_res=high_res_masks,
-        object_score_logits=object_score_logits,
-        is_mask_from_pts=True,
-    )
-    
-    # 7. Lưu vào output_dict (offload về CPU nếu cần)
-    storage_device = inference_state["storage_device"]
-    maskmem_features = maskmem_features.to(torch.bfloat16)
-    maskmem_features = maskmem_features.to(storage_device, non_blocking=True)
-    maskmem_pos_enc = self._get_maskmem_pos_enc(inference_state, {"maskmem_pos_enc": maskmem_pos_enc})
-    
-    frame_entry["maskmem_features"] = maskmem_features
-    frame_entry["maskmem_pos_enc"] = maskmem_pos_enc
-    
-    return maskmem_features, maskmem_pos_enc
-```
+### ✅ Step 2: Thêm _ensure_maskmem_available() trong sam2_video_predictor.py - ĐÃ XONG
 
-### Step 2: Thêm _ensure_maskmem_available() trong sam2_video_predictor.py
+**Commit:** `5267810`
 
-**Logic:**
-```python
-def _ensure_maskmem_available(self, inference_state, frame_idx):
-    """Đảm bảo maskmem có sẵn cho frame. Nếu None, recompute."""
-    output_dict = inference_state["output_dict"]
-    
-    # Kiểm tra cả cond và non_cond outputs
-    storage_key = None
-    frame_entry = None
-    
-    if frame_idx in output_dict["non_cond_frame_outputs"]:
-        storage_key = "non_cond_frame_outputs"
-        frame_entry = output_dict[storage_key][frame_idx]
-    elif frame_idx in output_dict["cond_frame_outputs"]:
-        storage_key = "cond_frame_outputs"
-        frame_entry = output_dict[storage_key][frame_idx]
-    
-    # Frame chưa được track - không cần recompute
-    if frame_entry is None:
-        return
-    
-    # Kiểm tra maskmem đã có chưa
-    if frame_entry["maskmem_features"] is not None:
-        return  # Đã có, không cần recompute
-    
-    # Recompute!
-    self._recompute_maskmem_for_frame(inference_state, frame_idx)
-```
+### ⏳ Step 3: Cần sửa sam2_base.py để gọi _ensure_maskmem_available()
 
-### Step 3: Sửa track_step() trong sam2_base.py
+**Vấn đề còn lại:** 
+- `_ensure_maskmem_available()` đã được thêm vào predictor
+- NHƯNG chưa được gọi từ đâu trong flow
+- Cần gọi từ `track_step()` trong sam2_base.py sau khi memory selection chọn frames
 
-**Tìm vị trí:** Trong `track_step()`, sau khi memory selection chọn frames nhưng trước khi dùng maskmem.
+**Lưu ý:** Hiện tại, `_run_single_frame_inference()` trong predictor gọi `track_step()` từ base class. `track_step()` sử dụng maskmem từ output_dict mà không kiểm tra xem có None không.
 
-**Cách thực hiện:**
-- Thêm kiểm tra và gọi recompute trong vòng lặp memory selection
-- Đặt ngay sau khi xác định `selected_*_outputs`
-
-**Lưu ý:** Cần truyền predictor instance vào để gọi method, hoặc đặt logic trong predictor class.
-
-### Step 3b: Cập nhật _run_single_frame_inference() trong sam2_video_predictor.py
-
-**Thay vì sửa track_step() (trong base class), sửa _run_single_frame_inference():**
-
-```python
-# Trong _run_single_frame_inference(), sau khi xác định selected frames
-# nhưng trước khi gọi track_step()
-
-# Đảm bảo maskmem có sẵn cho các frames được chọn
-selected_frames = [...]  # frames được chọn bởi memory selection
-for frame_idx in selected_frames:
-    self._ensure_maskmem_available(inference_state, frame_idx)
-```
-
-### Step 4: Testing
+### ⏳ Step 4: Testing
 - Test với video 1646 frames
 - Verify recompute được gọi đúng khi cần
 - Performance impact < 15%
