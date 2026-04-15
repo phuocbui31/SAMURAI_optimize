@@ -1043,6 +1043,12 @@ class SAM2VideoPredictor(SAM2Base):
             feat_sizes,
         ) = self._get_image_feature(inference_state, frame_idx, batch_size)
 
+        # Ensure maskmem is available for all frames that will be used by track_step
+        # This handles the case when maskmem has been evicted by release_old_frames()
+        # but Memory Selection still needs it based on high scores
+        if run_mem_encoder:
+            self._ensure_all_selected_masksmem_available(inference_state, frame_idx)
+
         # point and mask should not appear as input simultaneously on the same frame
         assert point_inputs is None or mask_inputs is None
         current_out = self.track_step(
@@ -1395,3 +1401,25 @@ class SAM2VideoPredictor(SAM2Base):
         # Save back to output_dict
         frame_entry["maskmem_features"] = maskmem_features
         frame_entry["maskmem_pos_enc"] = maskmem_pos_enc
+
+    def _ensure_all_selected_masksmem_available(self, inference_state, current_frame_idx):
+        """
+        Ensure maskmem is available for all frames in the output_dict that will be
+        considered by Memory Selection.
+        
+        This handles the case when release_old_frames() has evicted maskmem for frames
+        that are still needed by Memory Selection based on their scores.
+        """
+        output_dict = inference_state["output_dict"]
+        
+        # Check all frames in both cond and non_cond outputs
+        all_frame_indices = set()
+        all_frame_indices.update(output_dict["cond_frame_outputs"].keys())
+        all_frame_indices.update(output_dict["non_cond_frame_outputs"].keys())
+        
+        # Skip the current frame (it will compute its own maskmem)
+        all_frame_indices.discard(current_frame_idx)
+        
+        # Ensure maskmem for each frame
+        for frame_idx in all_frame_indices:
+            self._ensure_maskmem_available(inference_state, frame_idx)
