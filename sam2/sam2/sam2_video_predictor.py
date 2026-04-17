@@ -590,14 +590,25 @@ class SAM2VideoPredictor(SAM2Base):
         )
         return current_out["obj_ptr"]
 
-    def release_old_frames(self, inference_state, keep_window=10):
+    def release_old_frames(
+        self,
+        inference_state,
+        keep_window_maskmem=1000,
+        keep_window_pred_masks=60,
+    ):
         """
-        Giải phóng tensor nặng của frame outputs cũ để giảm GPU memory.
-        Giữ lại scores (best_iou_score, object_score_logits, kf_score, obj_ptr)
-        để memory selection logic trong sam2_base.py vẫn hoạt động.
+        Release heavy tensors of old non-conditioning frames to reduce memory.
 
-        Nếu inference_state["images"] là AsyncVideoFrameLoader, cũng giải phóng
-        các frame images cũ khỏi RAM (Input Streaming).
+        Keeps scores (best_iou_score, object_score_logits, kf_score, obj_ptr) so
+        Memory Selection logic in sam2_base.py continues to work after eviction.
+
+        Three independent windows:
+        - keep_window_maskmem: controls maskmem_features + maskmem_pos_enc (GPU VRAM)
+        - keep_window_pred_masks: controls pred_masks (CPU RAM)
+        - cached_features: evicted together with maskmem
+
+        Conditioning frames (output_dict["cond_frame_outputs"]) are NEVER deleted here.
+        They are managed separately by _maybe_promote_cond_frame (Phase 4).
         """
         output_dict = inference_state["output_dict"]
         cond_outputs = output_dict["cond_frame_outputs"]
@@ -607,56 +618,48 @@ class SAM2VideoPredictor(SAM2Base):
             return
 
         newest_cond = max(cond_outputs.keys())
-        oldest_allowed_idx = newest_cond - keep_window
+        oldest_allowed_maskmem = newest_cond - keep_window_maskmem
+        oldest_allowed_pred_masks = newest_cond - keep_window_pred_masks
 
-        # Giữ lại frame 0 (init frame với bbox ban đầu) và conditioning frame mới nhất
-        init_frame_idx = min(cond_outputs.keys())
-
-        # Xóa tensor nặng của non_cond_frame_outputs cũ, giữ lại scores
-        heavy_keys = ["maskmem_features", "maskmem_pos_enc", "pred_masks"]
         for frame_idx in list(non_cond_outputs.keys()):
-            if frame_idx >= oldest_allowed_idx:
-                continue
             entry = non_cond_outputs[frame_idx]
-            for key in heavy_keys:
-                if key in entry and entry[key] is not None:
-                    entry[key] = None
-            # Làm tương tự cho per-object outputs
-            for obj_idx in inference_state["output_dict_per_obj"]:
-                obj_entry = inference_state["output_dict_per_obj"][obj_idx][
-                    "non_cond_frame_outputs"
-                ].get(frame_idx)
-                if obj_entry is not None:
-                    for key in heavy_keys:
-                        if key in obj_entry and obj_entry[key] is not None:
-                            obj_entry[key] = None
+            # Evict maskmem + maskmem_pos_enc if out of maskmem window
+            if frame_idx < oldest_allowed_maskmem:
+                for key in ("maskmem_features", "maskmem_pos_enc"):
+                    if entry.get(key) is not None:
+                        entry[key] = None
+                for obj_idx in inference_state["output_dict_per_obj"]:
+                    obj_entry = inference_state["output_dict_per_obj"][obj_idx][
+                        "non_cond_frame_outputs"
+                    ].get(frame_idx)
+                    if obj_entry is not None:
+                        for key in ("maskmem_features", "maskmem_pos_enc"):
+                            if obj_entry.get(key) is not None:
+                                obj_entry[key] = None
+            # Evict pred_masks if out of pred_masks window
+            if frame_idx < oldest_allowed_pred_masks:
+                if entry.get("pred_masks") is not None:
+                    entry["pred_masks"] = None
+                for obj_idx in inference_state["output_dict_per_obj"]:
+                    obj_entry = inference_state["output_dict_per_obj"][obj_idx][
+                        "non_cond_frame_outputs"
+                    ].get(frame_idx)
+                    if (
+                        obj_entry is not None
+                        and obj_entry.get("pred_masks") is not None
+                    ):
+                        obj_entry["pred_masks"] = None
 
-        # Xóa cond_frame_outputs cũ (trừ init frame và frame mới nhất)
-        for frame_idx in list(cond_outputs.keys()):
-            if frame_idx >= oldest_allowed_idx:
-                continue
-            if frame_idx == init_frame_idx:
-                continue
-            del cond_outputs[frame_idx]
-            inference_state["consolidated_frame_inds"]["cond_frame_outputs"].discard(
-                frame_idx
-            )
-            for obj_idx in inference_state["output_dict_per_obj"]:
-                inference_state["output_dict_per_obj"][obj_idx][
-                    "cond_frame_outputs"
-                ].pop(frame_idx, None)
-
-        # Xóa cached features cũ
+        # Evict old cached_features (used only for in-flight frame features)
         for frame_idx in list(inference_state["cached_features"].keys()):
-            if frame_idx < oldest_allowed_idx:
+            if frame_idx < oldest_allowed_maskmem:
                 del inference_state["cached_features"][frame_idx]
 
-        # Input Streaming: Evict old frames from AsyncVideoFrameLoader if available
+        # Input streaming: evict images outside the maskmem keep range
         images_container = inference_state["images"]
         if hasattr(images_container, "evict_old_frames"):
-            # Keep frames within [oldest_allowed_idx - keep_window, newest_cond + keep_window]
-            keep_start = max(0, oldest_allowed_idx - keep_window)
-            keep_end = newest_cond + keep_window + 1
+            keep_start = max(0, oldest_allowed_maskmem)
+            keep_end = newest_cond + keep_window_maskmem + 1
             images_container.evict_old_frames(keep_start, keep_end)
 
         gc.collect()
