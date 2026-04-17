@@ -44,6 +44,12 @@ parser.add_argument(
     help="Giữ bao nhiêu frame gần nhất khi release (mặc định: 10)",
 )
 parser.add_argument(
+    "--max_cache_frames",
+    type=int,
+    default=10,
+    help="Số images tối đa giữ trong RAM (LRU cache). Mặc định: 10",
+)
+parser.add_argument(
     "--model_name",
     type=str,
     default="base_plus",
@@ -98,7 +104,6 @@ if save_to_video:
 
 test_videos = sorted(test_videos)
 for vid, video in enumerate(test_videos):
-
     cat_name = video.split("-")[0]
     cid_name = video.split("-")[1]
     video_basename = video.strip()
@@ -107,7 +112,7 @@ for vid, video in enumerate(test_videos):
     num_frames = len(os.listdir(osp.join(video_folder, cat_name, video.strip(), "img")))
 
     print(
-        f"\033[91mRunning video [{vid+1}/{len(test_videos)}]: {video} with {num_frames} frames\033[0m"
+        f"\033[91mRunning video [{vid + 1}/{len(test_videos)}]: {video} with {num_frames} frames\033[0m"
     )
 
     height, width = cv2.imread(osp.join(frame_folder, "00000001.jpg")).shape[:2]
@@ -130,6 +135,7 @@ for vid, video in enumerate(test_videos):
                 offload_video_to_cpu=True,
                 offload_state_to_cpu=False,
                 async_loading_frames=True,
+                max_cache_frames=args.max_cache_frames,
             )
         else:
             state = predictor.init_state(
@@ -137,6 +143,7 @@ for vid, video in enumerate(test_videos):
                 offload_video_to_cpu=True,
                 offload_state_to_cpu=True,
                 async_loading_frames=True,
+                max_cache_frames=args.max_cache_frames,
             )
 
         prompts = load_lasot_gt(
@@ -158,9 +165,9 @@ for vid, video in enumerate(test_videos):
             mask_to_vis = {}
             bbox_to_vis = {}
 
-            assert (
-                len(masks) == 1 and len(object_ids) == 1
-            ), "Only one object is supported right now"
+            assert len(masks) == 1 and len(object_ids) == 1, (
+                "Only one object is supported right now"
+            )
             for obj_id, mask in zip(object_ids, masks):
                 mask = mask[0].cpu().numpy()
                 mask = mask > 0.0
@@ -175,8 +182,7 @@ for vid, video in enumerate(test_videos):
                 mask_to_vis[obj_id] = mask
 
             if save_to_video:
-
-                img = cv2.imread(f"{frame_folder}/{frame_idx+1:08d}.jpg")
+                img = cv2.imread(f"{frame_folder}/{frame_idx + 1:08d}.jpg")
                 if img is None:
                     break
 
