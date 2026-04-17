@@ -126,3 +126,5 @@ model:
   memory_bank_iou_threshold: 0.5
   memory_bank_obj_score_threshold: 0.0
   memory_bank_kf_score_threshold: 0.0
+  max_cond_frames_in_attn: 2
+  force_include_init_cond_frame: true
