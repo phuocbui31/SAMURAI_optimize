@@ -11,33 +11,57 @@ from tqdm import tqdm
 
 
 def load_lasot_gt(gt_path):
-    with open(gt_path, 'r') as f:
+    with open(gt_path, "r") as f:
         gt = f.readlines()
-    
+
     # bbox in first frame are prompts
     prompts = {}
     fid = 0
     for line in gt:
-        x, y, w, h = map(int, line.split(','))
-        prompts[fid] = ((x, y, x+w, y+h), 0)
+        x, y, w, h = map(int, line.split(","))
+        prompts[fid] = ((x, y, x + w, y + h), 0)
         fid += 1
 
     return prompts
 
+
 parser = argparse.ArgumentParser(description="SAMURAI Optimized Inference")
-parser.add_argument("--optimized", action="store_true",
-                    help="Bật tất cả tối ưu memory (release old frames, async cache, offloading)")
-parser.add_argument("--release_interval", type=int, default=60,
-                    help="Mỗi bao nhiêu frame thì giải phóng frame cũ (mặc định: 60)")
-parser.add_argument("--keep_window", type=int, default=10,
-                    help="Giữ bao nhiêu frame gần nhất khi release (mặc định: 10)")
-parser.add_argument("--model_name", type=str, default="base_plus",
-                    choices=["base_plus", "small", "tiny"],
-                    help="Model size (mặc định: base_plus)")
-parser.add_argument("--data_root", type=str, default="data/LaSOT",
-                    help="Thư mục gốc chứa data (mặc định: data/LaSOT)")
-parser.add_argument("--testing_set", type=str, default=None,
-                    help="Đường dẫn file chứa danh sách video test. Nếu không chỉ định, sẽ dùng {data_root}/testing_set.txt")
+parser.add_argument(
+    "--optimized",
+    action="store_true",
+    help="Bật tất cả tối ưu memory (release old frames, async cache, offloading)",
+)
+parser.add_argument(
+    "--release_interval",
+    type=int,
+    default=60,
+    help="Mỗi bao nhiêu frame thì giải phóng frame cũ (mặc định: 60)",
+)
+parser.add_argument(
+    "--keep_window",
+    type=int,
+    default=10,
+    help="Giữ bao nhiêu frame gần nhất khi release (mặc định: 10)",
+)
+parser.add_argument(
+    "--model_name",
+    type=str,
+    default="base_plus",
+    choices=["base_plus", "small", "tiny"],
+    help="Model size (mặc định: base_plus)",
+)
+parser.add_argument(
+    "--data_root",
+    type=str,
+    default="data/LaSOT",
+    help="Thư mục gốc chứa data (mặc định: data/LaSOT)",
+)
+parser.add_argument(
+    "--testing_set",
+    type=str,
+    default=None,
+    help="Đường dẫn file chứa danh sách video test. Nếu không chỉ định, sẽ dùng {data_root}/testing_set.txt",
+)
 args = parser.parse_args()
 
 color = [
@@ -46,9 +70,11 @@ color = [
 
 # Xác định đường dẫn data từ argument
 data_root = args.data_root
-testing_set_path = args.testing_set if args.testing_set else osp.join(data_root, "testing_set.txt")
+testing_set_path = (
+    args.testing_set if args.testing_set else osp.join(data_root, "testing_set.txt")
+)
 
-with open(testing_set_path, 'r') as f:
+with open(testing_set_path, "r") as f:
     test_videos = [line for line in f.readlines() if line.strip()]
 
 exp_name = "samurai"
@@ -73,14 +99,16 @@ if save_to_video:
 test_videos = sorted(test_videos)
 for vid, video in enumerate(test_videos):
 
-    cat_name = video.split('-')[0]
-    cid_name = video.split('-')[1]
+    cat_name = video.split("-")[0]
+    cid_name = video.split("-")[1]
     video_basename = video.strip()
     frame_folder = osp.join(video_folder, cat_name, video.strip(), "img")
 
     num_frames = len(os.listdir(osp.join(video_folder, cat_name, video.strip(), "img")))
 
-    print(f"\033[91mRunning video [{vid+1}/{len(test_videos)}]: {video} with {num_frames} frames\033[0m")
+    print(
+        f"\033[91mRunning video [{vid+1}/{len(test_videos)}]: {video} with {num_frames} frames\033[0m"
+    )
 
     height, width = cv2.imread(osp.join(frame_folder, "00000001.jpg")).shape[:2]
 
@@ -89,8 +117,10 @@ for vid, video in enumerate(test_videos):
     predictions = []
 
     if save_to_video:
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(osp.join(vis_folder, f'{video_basename}.mp4'), fourcc, 30, (width, height))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(
+            osp.join(vis_folder, f"{video_basename}.mp4"), fourcc, 30, (width, height)
+        )
 
     # Start processing frames
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
@@ -109,20 +139,28 @@ for vid, video in enumerate(test_videos):
                 async_loading_frames=True,
             )
 
-        prompts = load_lasot_gt(osp.join(video_folder, cat_name, video.strip(), "groundtruth.txt"))
+        prompts = load_lasot_gt(
+            osp.join(video_folder, cat_name, video.strip(), "groundtruth.txt")
+        )
 
         bbox, track_label = prompts[0]
-        frame_idx, object_ids, masks = predictor.add_new_points_or_box(state, box=bbox, frame_idx=0, obj_id=0)
+        frame_idx, object_ids, masks = predictor.add_new_points_or_box(
+            state, box=bbox, frame_idx=0, obj_id=0
+        )
 
         propagate_kwargs = {}
         if args.optimized:
             propagate_kwargs["release_interval"] = args.release_interval
             propagate_kwargs["keep_window"] = args.keep_window
-        for frame_idx, object_ids, masks in predictor.propagate_in_video(state, **propagate_kwargs):
+        for frame_idx, object_ids, masks in predictor.propagate_in_video(
+            state, **propagate_kwargs
+        ):
             mask_to_vis = {}
             bbox_to_vis = {}
 
-            assert len(masks) == 1 and len(object_ids) == 1, "Only one object is supported right now"
+            assert (
+                len(masks) == 1 and len(object_ids) == 1
+            ), "Only one object is supported right now"
             for obj_id, mask in zip(object_ids, masks):
                 mask = mask[0].cpu().numpy()
                 mask = mask > 0.0
@@ -132,38 +170,47 @@ for vid, video in enumerate(test_videos):
                 else:
                     y_min, x_min = non_zero_indices.min(axis=0).tolist()
                     y_max, x_max = non_zero_indices.max(axis=0).tolist()
-                    bbox = [x_min, y_min, x_max-x_min, y_max-y_min]
+                    bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
                 bbox_to_vis[obj_id] = bbox
                 mask_to_vis[obj_id] = mask
 
             if save_to_video:
 
-                img = cv2.imread(f'{frame_folder}/{frame_idx+1:08d}.jpg') 
+                img = cv2.imread(f"{frame_folder}/{frame_idx+1:08d}.jpg")
                 if img is None:
                     break
-                
+
                 for obj_id in mask_to_vis.keys():
                     mask_img = np.zeros((height, width, 3), np.uint8)
-                    mask_img[mask_to_vis[obj_id]] = color[(obj_id+1)%len(color)]
+                    mask_img[mask_to_vis[obj_id]] = color[(obj_id + 1) % len(color)]
                     img = cv2.addWeighted(img, 1, mask_img, 0.75, 0)
-                
+
                 for obj_id in bbox_to_vis.keys():
-                    cv2.rectangle(img, (bbox_to_vis[obj_id][0], bbox_to_vis[obj_id][1]), (bbox_to_vis[obj_id][0]+bbox_to_vis[obj_id][2], bbox_to_vis[obj_id][1]+bbox_to_vis[obj_id][3]), color[(obj_id)%len(color)], 2)
-                
+                    cv2.rectangle(
+                        img,
+                        (bbox_to_vis[obj_id][0], bbox_to_vis[obj_id][1]),
+                        (
+                            bbox_to_vis[obj_id][0] + bbox_to_vis[obj_id][2],
+                            bbox_to_vis[obj_id][1] + bbox_to_vis[obj_id][3],
+                        ),
+                        color[(obj_id) % len(color)],
+                        2,
+                    )
+
                 x1, y1, x2, y2 = prompts[frame_idx][0]
                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 out.write(img)
 
-            predictions.append(bbox_to_vis)        
-        
+            predictions.append(bbox_to_vis)
+
     os.makedirs(pred_folder, exist_ok=True)
-    with open(osp.join(pred_folder, f'{video_basename}.txt'), 'w') as f:
+    with open(osp.join(pred_folder, f"{video_basename}.txt"), "w") as f:
         for pred in predictions:
             x, y, w, h = pred[0]
             f.write(f"{x},{y},{w},{h}\n")
 
     if save_to_video:
-        out.release() 
+        out.release()
 
     del predictor
     del state
