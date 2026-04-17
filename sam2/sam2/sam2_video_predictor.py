@@ -833,9 +833,22 @@ class SAM2VideoPredictor(SAM2Base):
         max_frame_num_to_track=None,
         reverse=False,
         release_interval=0,
-        keep_window=10,
+        keep_window_maskmem=1000,
+        keep_window_pred_masks=60,
+        enable_auto_promote=True,
+        promote_interval=500,
+        promote_search_window=50,
+        max_auto_promoted_cond_frames=4,
     ):
         """Propagate the input points across frames to track in the entire video."""
+        import warnings
+
+        if promote_search_window > keep_window_maskmem:
+            warnings.warn(
+                f"promote_search_window ({promote_search_window}) > "
+                f"keep_window_maskmem ({keep_window_maskmem}); candidate frames "
+                f"may have been evicted by release_old_frames."
+            )
         self.propagate_in_video_preflight(inference_state)
 
         output_dict = inference_state["output_dict"]
@@ -910,17 +923,26 @@ class SAM2VideoPredictor(SAM2Base):
             _, video_res_masks = self._get_orig_video_res_output(
                 inference_state, pred_masks
             )
-            # Giải phóng frame cũ định kỳ (Tối ưu A)
+            # Periodic memory maintenance (Phase 4 design)
             if (
                 release_interval > 0
                 and frame_idx > 0
                 and frame_idx % release_interval == 0
                 and not reverse
             ):
-                promote_idx = frame_idx - 2
-                if promote_idx in output_dict["non_cond_frame_outputs"]:
-                    self.append_frame_as_cond_frame(inference_state, promote_idx)
-                self.release_old_frames(inference_state, keep_window=keep_window)
+                if enable_auto_promote:
+                    self._maybe_promote_cond_frame(
+                        inference_state,
+                        frame_idx,
+                        promote_interval=promote_interval,
+                        promote_search_window=promote_search_window,
+                        max_auto_promoted_cond_frames=max_auto_promoted_cond_frames,
+                    )
+                self.release_old_frames(
+                    inference_state,
+                    keep_window_maskmem=keep_window_maskmem,
+                    keep_window_pred_masks=keep_window_pred_masks,
+                )
             yield frame_idx, obj_ids, video_res_masks
 
     def _add_output_per_object(
