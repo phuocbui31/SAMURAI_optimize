@@ -595,7 +595,7 @@ class SAM2VideoPredictor(SAM2Base):
         Giải phóng tensor nặng của frame outputs cũ để giảm GPU memory.
         Giữ lại scores (best_iou_score, object_score_logits, kf_score, obj_ptr)
         để memory selection logic trong sam2_base.py vẫn hoạt động.
-        
+
         Nếu inference_state["images"] là AsyncVideoFrameLoader, cũng giải phóng
         các frame images cũ khỏi RAM (Input Streaming).
         """
@@ -653,7 +653,7 @@ class SAM2VideoPredictor(SAM2Base):
 
         # Input Streaming: Evict old frames from AsyncVideoFrameLoader if available
         images_container = inference_state["images"]
-        if hasattr(images_container, 'evict_old_frames'):
+        if hasattr(images_container, "evict_old_frames"):
             # Keep frames within [oldest_allowed_idx - keep_window, newest_cond + keep_window]
             keep_start = max(0, oldest_allowed_idx - keep_window)
             keep_end = newest_cond + keep_window + 1
@@ -991,7 +991,7 @@ class SAM2VideoPredictor(SAM2Base):
             device = inference_state["device"]
             images_container = inference_state["images"]
             # Support both list (original) and AsyncVideoFrameLoader (streaming)
-            if hasattr(images_container, '__getitem__'):
+            if hasattr(images_container, "__getitem__"):
                 # AsyncVideoFrameLoader: load frame on-demand (may trigger eviction)
                 image = images_container[frame_idx].to(device).float().unsqueeze(0)
             else:
@@ -1043,12 +1043,6 @@ class SAM2VideoPredictor(SAM2Base):
             feat_sizes,
         ) = self._get_image_feature(inference_state, frame_idx, batch_size)
 
-        # Ensure maskmem is available for all frames that will be used by track_step
-        # This handles the case when maskmem has been evicted by release_old_frames()
-        # but Memory Selection still needs it based on high scores
-        if run_mem_encoder:
-            self._ensure_all_selected_masksmem_available(inference_state, frame_idx)
-
         # point and mask should not appear as input simultaneously on the same frame
         assert point_inputs is None or mask_inputs is None
         current_out = self.track_step(
@@ -1072,7 +1066,7 @@ class SAM2VideoPredictor(SAM2Base):
         if maskmem_features is not None:
             maskmem_features = maskmem_features.to(torch.bfloat16)
             maskmem_features = maskmem_features.to(storage_device, non_blocking=True)
-        pred_masks_gpu = current_out["pred_masks"] # (B, 1, H, W)
+        pred_masks_gpu = current_out["pred_masks"]  # (B, 1, H, W)
         # potentially fill holes in the predicted masks
         if self.fill_hole_area > 0:
             pred_masks_gpu = fill_holes_in_mask_scores(
@@ -1088,8 +1082,8 @@ class SAM2VideoPredictor(SAM2Base):
         best_kf_score = current_out["kf_ious"]
         # make a compact version of this frame's output to reduce the state size
         compact_current_out = {
-            "maskmem_features": maskmem_features, # (B, C, H, W)
-            "maskmem_pos_enc": maskmem_pos_enc, 
+            "maskmem_features": maskmem_features,  # (B, C, H, W)
+            "maskmem_pos_enc": maskmem_pos_enc,
             "pred_masks": pred_masks,
             "obj_ptr": obj_ptr,
             "object_score_logits": object_score_logits,
