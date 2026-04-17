@@ -38,10 +38,46 @@ parser.add_argument(
     help="Mỗi bao nhiêu frame thì giải phóng frame cũ (mặc định: 60)",
 )
 parser.add_argument(
-    "--keep_window",
+    "--keep_window_maskmem",
     type=int,
-    default=10,
-    help="Giữ bao nhiêu frame gần nhất khi release (mặc định: 10)",
+    default=1000,
+    help="Số frame giữ maskmem_features trong output_dict. Mặc định: 1000",
+)
+parser.add_argument(
+    "--keep_window_pred_masks",
+    type=int,
+    default=60,
+    help="Số frame giữ pred_masks trong output_dict. Mặc định: 60",
+)
+parser.add_argument(
+    "--enable_auto_promote",
+    action="store_true",
+    default=True,
+    help="Bật auto-promote cond frames chất lượng cao. Mặc định: bật",
+)
+parser.add_argument(
+    "--no_auto_promote",
+    dest="enable_auto_promote",
+    action="store_false",
+    help="Tắt auto-promote (reproduce SAMURAI baseline 1 cond frame)",
+)
+parser.add_argument(
+    "--promote_interval",
+    type=int,
+    default=500,
+    help="Khoảng cách tối thiểu giữa 2 lần promote. Mặc định: 500",
+)
+parser.add_argument(
+    "--promote_search_window",
+    type=int,
+    default=50,
+    help="Cửa sổ tìm candidate lùi từ frame hiện tại. Mặc định: 50",
+)
+parser.add_argument(
+    "--max_auto_promoted_cond_frames",
+    type=int,
+    default=4,
+    help="Cap số cond frame auto-promoted (ngoài frame 0). Mặc định: 4",
 )
 parser.add_argument(
     "--max_cache_frames",
@@ -158,7 +194,14 @@ for vid, video in enumerate(test_videos):
         propagate_kwargs = {}
         if args.optimized:
             propagate_kwargs["release_interval"] = args.release_interval
-            propagate_kwargs["keep_window"] = args.keep_window
+            propagate_kwargs["keep_window_maskmem"] = args.keep_window_maskmem
+            propagate_kwargs["keep_window_pred_masks"] = args.keep_window_pred_masks
+            propagate_kwargs["enable_auto_promote"] = args.enable_auto_promote
+            propagate_kwargs["promote_interval"] = args.promote_interval
+            propagate_kwargs["promote_search_window"] = args.promote_search_window
+            propagate_kwargs["max_auto_promoted_cond_frames"] = (
+                args.max_auto_promoted_cond_frames
+            )
         for frame_idx, object_ids, masks in predictor.propagate_in_video(
             state, **propagate_kwargs
         ):
