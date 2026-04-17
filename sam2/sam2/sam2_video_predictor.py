@@ -685,6 +685,76 @@ class SAM2VideoPredictor(SAM2Base):
         )
         inference_state["consolidated_frame_inds"]["cond_frame_outputs"].add(frame_idx)
 
+    def _maybe_promote_cond_frame(
+        self,
+        inference_state,
+        frame_idx,
+        promote_interval=500,
+        promote_search_window=50,
+        max_auto_promoted_cond_frames=4,
+    ):
+        """Conditionally promote a high-quality non-cond frame to cond.
+
+        Throttle + threshold-based selection, streaming-friendly (bounded memory
+        without needing total num_frames upfront).
+        """
+        cond_outputs = inference_state["output_dict"]["cond_frame_outputs"]
+        non_cond = inference_state["output_dict"]["non_cond_frame_outputs"]
+
+        # 1. Throttle: skip if recent cond is closer than promote_interval
+        cond_keys_excluding_zero = [k for k in cond_outputs.keys() if k != 0]
+        nearest_cond = max(cond_keys_excluding_zero) if cond_keys_excluding_zero else 0
+        if frame_idx - nearest_cond < promote_interval:
+            return
+
+        # 2. Search for the nearest quality candidate (backward within window)
+        candidate_idx = None
+        search_start = max(1, frame_idx - promote_search_window)
+        for i in range(frame_idx - 2, search_start - 1, -1):
+            if i not in non_cond:
+                continue
+            entry = non_cond[i]
+            if entry.get("maskmem_features") is None:
+                continue
+            iou = entry.get("best_iou_score")
+            obj = entry.get("object_score_logits")
+            kf = entry.get("kf_score")
+            if iou is None or obj is None:
+                continue
+            try:
+                iou_val = iou.item()
+                obj_val = obj.item()
+                kf_val = kf.item() if kf is not None else None
+            except (AttributeError, RuntimeError):
+                continue
+            if (
+                iou_val > self.memory_bank_iou_threshold
+                and obj_val > self.memory_bank_obj_score_threshold
+                and (kf_val is None or kf_val > self.memory_bank_kf_score_threshold)
+            ):
+                candidate_idx = i
+                break
+
+        if candidate_idx is None:
+            return
+
+        # 3. Promote candidate to cond
+        self.append_frame_as_cond_frame(inference_state, candidate_idx)
+
+        # 4. Evict oldest auto-promoted cond frame (never evict frame 0)
+        auto_promoted = sorted(k for k in cond_outputs.keys() if k != 0)
+        while len(auto_promoted) > max_auto_promoted_cond_frames:
+            oldest = auto_promoted[0]
+            cond_outputs.pop(oldest, None)
+            for obj_idx in inference_state["output_dict_per_obj"]:
+                inference_state["output_dict_per_obj"][obj_idx][
+                    "cond_frame_outputs"
+                ].pop(oldest, None)
+            inference_state["consolidated_frame_inds"]["cond_frame_outputs"].discard(
+                oldest
+            )
+            auto_promoted.pop(0)
+
     @torch.inference_mode()
     def propagate_in_video_preflight(self, inference_state):
         """Prepare inference_state and consolidate temporary outputs before tracking."""
