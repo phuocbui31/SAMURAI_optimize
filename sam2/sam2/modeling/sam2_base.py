@@ -704,9 +704,27 @@ class SAM2Base(torch.nn.Module):
             assert len(output_dict["cond_frame_outputs"]) > 0
             # Select a maximum number of temporally closest cond frames for cross attention
             cond_outputs = output_dict["cond_frame_outputs"]
-            selected_cond_outputs, unselected_cond_outputs = select_closest_cond_frames(
-                frame_idx, cond_outputs, self.max_cond_frames_in_attn
-            )
+            if (
+                self.force_include_init_cond_frame
+                and 0 in cond_outputs
+                and self.max_cond_frames_in_attn >= 2
+                and len(cond_outputs) > self.max_cond_frames_in_attn
+            ):
+                # Ensure frame 0 (user anchor) is always included as a long-term cond frame.
+                # Pick (max_cond_frames_in_attn - 1) closest cond frames from the remaining
+                # set, then prepend frame 0.
+                frame_0_entry = cond_outputs[0]
+                other_cond = {k: v for k, v in cond_outputs.items() if k != 0}
+                selected_others, unselected_cond_outputs = select_closest_cond_frames(
+                    frame_idx, other_cond, self.max_cond_frames_in_attn - 1
+                )
+                selected_cond_outputs = {0: frame_0_entry, **selected_others}
+            else:
+                selected_cond_outputs, unselected_cond_outputs = (
+                    select_closest_cond_frames(
+                        frame_idx, cond_outputs, self.max_cond_frames_in_attn
+                    )
+                )
             t_pos_and_prevs = [(0, out) for out in selected_cond_outputs.values()]
             # Add last (self.num_maskmem - 1) frames before current frame for non-conditioning memory
             # the earliest one has t_pos=1 and the latest one has t_pos=self.num_maskmem-1
