@@ -131,9 +131,14 @@ Similar layouts are expected for OTB, GOT-10k, TrackingNet, UAV123, and NFS. See
 ```bash
 python scripts/main_inference.py \
   [--optimized]                     # Enable memory optimizations (default: no)
-  [--release_interval 60]           # Free GPU memory every N frames (default: 60)
-  [--keep_window_maskmem 1000]      # Max cached maskmem frames (default: 1000)
-  [--keep_window_pred_masks 1000]   # Max cached pred masks (default: 1000)
+  [--release_interval 60]           # Run release + auto-promote every N frames (default: 60)
+  [--max_cache_frames 10]           # LRU cap for images in RAM (default: 10)
+  [--keep_window_maskmem 1000]      # Max cached maskmem frames in VRAM (default: 1000)
+  [--keep_window_pred_masks 60]     # Max cached pred masks in RAM (default: 60)
+  [--no_auto_promote]               # Disable quality-checked auto-promote (default: enabled)
+  [--promote_interval 500]          # Min gap between two promotions (default: 500)
+  [--promote_search_window 50]      # Backward search window for candidate (default: 50)
+  [--max_auto_promoted_cond_frames 4]  # Cap of auto-promoted cond frames (default: 4)
 ```
 
 This script:
@@ -256,11 +261,16 @@ Any code modifying inference memory paths must:
    - SAM 2 segment prediction on current frame (with mask prompt from Kalman filter).
    - Kalman filter predicts next bbox from motion history.
    - Memory bank updated with new frame embeddings (subject to LRU eviction).
-4. **Optimization Knobs**:
-   - `--optimized`: Enable memory optimizations (recompute maskmem on demand).
-   - `--release_interval N`: Free GPU memory every N frames.
-   - `--keep_window_maskmem K`: Maximum frames kept in maskmem cache (LRU eviction).
-   - `--keep_window_pred_masks K`: Maximum predicted masks retained.
+4. **Optimization Knobs** (defaults match `scripts/main_inference.py`):
+   - `--optimized`: Enable memory optimizations (3-window release + auto-promote).
+   - `--release_interval N` (default 60): Run release + auto-promote every N frames.
+   - `--max_cache_frames K` (default 10): LRU cap for image tensors in `AsyncVideoFrameLoader` (system RAM).
+   - `--keep_window_maskmem K` (default 1000): Frames kept in `maskmem_features` cache (GPU VRAM).
+   - `--keep_window_pred_masks K` (default 60): Frames kept in `pred_masks` cache (system RAM).
+   - `--enable_auto_promote` / `--no_auto_promote` (default: enabled): Quality-checked promotion of non-cond frames to cond.
+   - `--promote_interval N` (default 500): Minimum gap between two auto-promotions.
+   - `--promote_search_window N` (default 50): Backward search window for a candidate.
+   - `--max_auto_promoted_cond_frames K` (default 4): Cap on auto-promoted cond frames (frame 0 always kept).
 
 ### Memory Optimization
 
