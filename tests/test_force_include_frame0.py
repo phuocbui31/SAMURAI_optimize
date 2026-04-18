@@ -62,4 +62,10 @@ for yaml_name in [
         f"{yaml_name} missing force_include_init_cond_frame: true"
     )
 
+# Verify select_closest_cond_frames supports max=1
+utils_src = pathlib.Path("sam2/sam2/modeling/sam2_utils.py").read_text()
+assert "max_cond_frame_num == 1" in utils_src, (
+    "select_closest_cond_frames missing max=1 branch"
+)
+
 print("PASS")

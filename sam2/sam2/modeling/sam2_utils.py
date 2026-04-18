@@ -32,6 +32,15 @@ def select_closest_cond_frames(frame_idx, cond_frame_outputs, max_cond_frame_num
     if max_cond_frame_num == -1 or len(cond_frame_outputs) <= max_cond_frame_num:
         selected_outputs = cond_frame_outputs
         unselected_outputs = {}
+    elif max_cond_frame_num == 1:
+        # Special case: when only 1 frame is needed (e.g. force_include_init_cond_frame
+        # reserves a slot for frame 0, leaving max-1=1 for the remaining selection),
+        # simply pick the temporally closest frame.
+        closest = min(cond_frame_outputs.keys(), key=lambda t: abs(t - frame_idx))
+        selected_outputs = {closest: cond_frame_outputs[closest]}
+        unselected_outputs = {
+            t: v for t, v in cond_frame_outputs.items() if t != closest
+        }
     else:
         assert max_cond_frame_num >= 2, "we should allow using 2+ conditioning frames"
         selected_outputs = {}

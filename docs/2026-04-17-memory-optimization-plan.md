@@ -1077,6 +1077,7 @@ Root cause of current slowdown: `_ensure_all_selected_masksmem_available` at `sa
 **Rationale:** (spec §4.3, §4.4, §11) Sau Phase 2 cond frames không còn bị xoá, và Phase 4 đã thêm auto-promote, nên số lượng cond frames có thể >> `max_cond_frames_in_attn`. `select_closest_cond_frames` chỉ chọn k cond frames gần frame hiện tại nhất ⇒ frame 0 sẽ bị loại sau vài trăm frame. Ép frame 0 vào luôn giữ long-term anchor, chống drift.
 
 **Files touched:**
+- `sam2/sam2/modeling/sam2_utils.py` (extend `select_closest_cond_frames` to support `max_cond_frame_num=1`)
 - `sam2/sam2/modeling/sam2_base.py` (add param + update memory prep logic)
 - `sam2/sam2/configs/samurai/sam2.1_hiera_b+.yaml`
 - `sam2/sam2/configs/samurai/sam2.1_hiera_l.yaml`
@@ -1137,6 +1138,53 @@ Root cause of current slowdown: `_ensure_all_selected_masksmem_available` at `sa
   ```bash
   git add sam2/sam2/modeling/sam2_base.py
   git commit -m "feat(base): add force_include_init_cond_frame param to SAM2Base"
+  ```
+
+### Task 5.1b: Extend `select_closest_cond_frames` to support `max_cond_frame_num=1`
+
+**Rationale:** Task 5.2 sẽ gọi `select_closest_cond_frames(..., max_cond_frames_in_attn - 1)`. Khi `max_cond_frames_in_attn=2` (config mặc định), giá trị truyền vào là `1`. Hàm gốc SAM 2 có assertion `max_cond_frame_num >= 2` và thuật toán luôn chọn 1 frame trước + 1 frame sau → crash khi `max=1`. Cần thêm nhánh xử lý `max=1`: chọn frame gần `frame_idx` nhất (theo `abs(t - frame_idx)`).
+
+- [ ] **Step 1 — Read:** Đọc `sam2/sam2/modeling/sam2_utils.py` lines 19-61 để xác nhận hàm `select_closest_cond_frames` khớp với oldString dưới.
+
+- [ ] **Step 2 — Edit** `select_closest_cond_frames`:
+
+  oldString:
+  ```python
+    else:
+        assert max_cond_frame_num >= 2, "we should allow using 2+ conditioning frames"
+        selected_outputs = {}
+
+        # the closest conditioning frame before `frame_idx` (if any)
+        idx_before = max((t for t in cond_frame_outputs if t < frame_idx), default=None)
+  ```
+
+  newString:
+  ```python
+    elif max_cond_frame_num == 1:
+        # Special case: when only 1 frame is needed (e.g. force_include_init_cond_frame
+        # reserves a slot for frame 0, leaving max-1=1 for the remaining selection),
+        # simply pick the temporally closest frame.
+        closest = min(cond_frame_outputs.keys(), key=lambda t: abs(t - frame_idx))
+        selected_outputs = {closest: cond_frame_outputs[closest]}
+        unselected_outputs = {
+            t: v for t, v in cond_frame_outputs.items() if t != closest
+        }
+    else:
+        assert max_cond_frame_num >= 2, "we should allow using 2+ conditioning frames"
+        selected_outputs = {}
+
+        # the closest conditioning frame before `frame_idx` (if any)
+        idx_before = max((t for t in cond_frame_outputs if t < frame_idx), default=None)
+  ```
+
+- [ ] **Step 3 — Verify:** `grep -n "max_cond_frame_num == 1" sam2/sam2/modeling/sam2_utils.py` → expect 1 match.
+
+- [ ] **Step 4 — Syntax check:** `python -c "import ast; ast.parse(open('sam2/sam2/modeling/sam2_utils.py').read()); print('OK')"` exit 0 with `OK`.
+
+- [ ] **Step 5 — Commit:**
+  ```bash
+  git add sam2/sam2/modeling/sam2_utils.py
+  git commit -m "fix(utils): extend select_closest_cond_frames to support max_cond_frame_num=1"
   ```
 
 ### Task 5.2: Honor `force_include_init_cond_frame` in `_prepare_memory_conditioned_features`
@@ -1311,6 +1359,12 @@ Tất cả 4 file có cùng khối hyperparameter cuối — kết thúc bằng 
           "force_include_init_cond_frame: true" in text
       ), f"{yaml_name} missing force_include_init_cond_frame"
 
+  # Verify select_closest_cond_frames supports max=1
+  utils_src = pathlib.Path("sam2/sam2/modeling/sam2_utils.py").read_text()
+  assert "max_cond_frame_num == 1" in utils_src, (
+      "select_closest_cond_frames missing max=1 branch"
+  )
+
   print("PASS")
   ```
 
@@ -1330,11 +1384,12 @@ Tất cả 4 file có cùng khối hyperparameter cuối — kết thúc bằng 
   ```
 
 **Phase 5 exit criteria:**
+- `select_closest_cond_frames` trong `sam2_utils.py` hỗ trợ `max_cond_frame_num=1` (chọn frame gần nhất) bên cạnh logic `>=2` sẵn có.
 - `SAM2Base.__init__` accepts `force_include_init_cond_frame: bool = False` và expose `self.force_include_init_cond_frame`.
 - `_prepare_memory_conditioned_features` giữ frame 0 trong `selected_cond_outputs` khi flag bật, `max_cond_frames_in_attn ≥ 2`, frame 0 ∈ cond_outputs, và `len(cond_outputs) > max_cond_frames_in_attn`.
 - Cả 4 YAML configs trong `sam2/sam2/configs/samurai/` có cả `max_cond_frames_in_attn: 2` và `force_include_init_cond_frame: true`; `yaml.safe_load` parse OK.
 - `python tests/test_force_include_frame0.py` in ra `PASS`.
-- 4 commit (`5.1`, `5.2`, `5.3`, `5.4`) đã land.
+- 5 commit (`5.1`, `5.1b`, `5.2`, `5.3`, `5.4`) đã land.
 
 ---
 
