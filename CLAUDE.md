@@ -139,6 +139,7 @@ python scripts/main_inference.py \
   [--promote_interval 500]          # Min gap between two promotions (default: 500)
   [--promote_search_window 50]      # Backward search window for candidate (default: 50)
   [--max_auto_promoted_cond_frames 4]  # Cap of auto-promoted cond frames (default: 4)
+  [--evaluate]                      # In LaSOT metrics (AUC/OP50/OP75/Prec@20/NormPrec@0.20) sau mỗi video + bảng tổng cuối (default: off)
 ```
 
 This script:
@@ -339,8 +340,26 @@ Rationale: Keeping SAM 2 vendored allows isolated tracking customizations while 
 
 1. Prepare data in LaSOT directory layout.
 2. Add a new entry to `data/training_set.txt` or `data/testing_set.txt`.
-3. Run `python scripts/main_inference.py` (add benchmark-specific output parsing if needed).
-4. Use `lib/test/` utilities to compute metrics.
+3. Run `python scripts/main_inference.py --evaluate` (auto in metrics per-video + summary).
+4. Để chạy offline trên prediction `.txt` đã có, dùng trực tiếp `lib/test/analysis/extract_results.py` + `plot_results.py`.
+
+### LaSOT Evaluation (`scripts/eval_utils.py`)
+
+Module `scripts/eval_utils.py` reuse `calc_seq_err_robust` từ `lib/test/analysis/extract_results.py` (KHÔNG copy implementation) để tính metric chuẩn LaSOT Protocol-II:
+
+| Metric | Ý nghĩa | Threshold |
+|--------|---------|-----------|
+| AUC | Mean success rate over IoU thresholds | 0..1 step 0.05 |
+| OP50 / OP75 | Success rate at IoU ≥ 0.5 / 0.75 | idx 10 / 15 |
+| Prec@20 | Precision at center error 20 px | idx 20 |
+| NPrec@0.20 | Normalized precision at 0.20 | idx 20 |
+| mIoU | Mean IoU over valid frames (NaN nếu 0 valid) | — |
+
+Per-video metrics in ngay sau khi track xong; bảng tổng + dòng MEAN in ở cuối (kể cả khi `KeyboardInterrupt` — main_inference.py wrap loop trong `try/finally`).
+
+`load_lasot_visibility(seq_dir, num_frames)` đọc `full_occlusion.txt` + `out_of_view.txt`; trả mask all-True kèm warning nếu file thiếu/lệch shape (tránh crash `~target_visible` trong `calc_seq_err_robust` khi `dataset='lasot'`).
+
+AST smoke test: `tests/test_evaluate_cli.py` — verify `--evaluate` flag, default False, wiring sang `eval_utils`, reuse `calc_seq_err_robust`, và `try/finally` cho summary.
 
 ## FAQ & Troubleshooting
 

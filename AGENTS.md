@@ -24,6 +24,7 @@ Checkpoints: `cd sam2/checkpoints && ./download_ckpts.sh`.
 ## Running
 
 - Single-GPU inference: `python scripts/main_inference.py [--optimized] [--release_interval 60] [--keep_window_maskmem 1000]`
+- With LaSOT eval: add `--evaluate` — tính AUC / OP50 / OP75 / Prec@20 / NormPrec@0.20 sau từng video và in bảng tổng hợp ở cuối (default False). Predictions + mp4 visualization vẫn ghi ra như trước. Xem `scripts/eval_utils.py`.
 - Multi-GPU (8 chunks): `bash scripts/inference.sh` (uses `CUDA_VISIBLE_DEVICES`).
 - Demo on a video: `python scripts/demo.py --video_path <video.mp4|frames_dir> --txt_path <bbox.txt>` (bbox is `x,y,w,h`, one line).
 
