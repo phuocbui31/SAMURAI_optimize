@@ -111,4 +111,4 @@ No linter is configured in this fork. Match surrounding style. If you run anythi
 
 - Make focused commits; do not bundle reformat-only changes with logic changes.
 - Do not commit checkpoints, datasets, `*.pth`, or anything under `data/`.
-- Run at minimum the AST tests (`python tests/test_max_cache_frames.py`, `python tests/test_force_include_frame0.py`, `python tests/test_release_old_frames.py`, `python tests/test_maybe_promote.py`) before declaring a task done.
+- Run `bash tests/run_all_tests.sh` (which runs all `tests/test_*.py` AST smoke tests) before declaring a task done. Individual tests can also be invoked directly, e.g. `python tests/test_prefetcher.py`.
