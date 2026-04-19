@@ -28,11 +28,11 @@ python tests/bench_inference.py -- \
 
 Optimized:
 ```bash
-python tests/bench_inference.py -- \
+python tests/bench_inference.py \
     --optimized \
-    --max_cache_frames 10 --keep_window_maskmem 1000 \
-    --keep_window_pred_masks 60 --promote_interval 500 \
-    --max_auto_promoted_cond_frames 4 --model_name base_plus \
+    --max_cache_frames 10 \ --keep_window_maskmem 1000 \
+    --keep_window_pred_masks 60 \ --promote_interval 500 \
+    --max_auto_promoted_cond_frames 4 \ --model_name base_plus \
     --data_root data/LaSOT \
     --testing_set data/LaSOT/testing_set_small.txt
 ```
