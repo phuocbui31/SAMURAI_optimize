@@ -83,7 +83,7 @@ No linter is configured in this fork. Match surrounding style. If you run anythi
 - Validate CLI/user inputs early in `scripts/*` and raise `ValueError` / `FileNotFoundError` with actionable messages.
 - In hot inference loops, prefer `assert` for invariants that should never fire in production, and explicit checks (`if x is None: raise ...`) for recoverable conditions.
 - Never swallow exceptions silently. Use `loguru` (already a dependency) for logging in new code; `print` is acceptable in scripts but use `tqdm.write` inside progress bars.
-- Always free GPU memory deterministically when the function owns it: `del tensor; gc.collect(); torch.cuda.empty_cache()` (pattern used throughout `main_inference.py`).
+- Free GPU memory deterministically when the function owns it: `del tensor` or `entry[key] = None` — refcount→0 trả block về CUDA caching allocator ngay. **Do NOT** call `gc.collect()` in inference hot paths (blocking, stalls prefetcher under GIL); PyTorch tensors don't form reference cycles. `torch.cuda.empty_cache()` is only needed when sharing the GPU with other processes — dedicated jobs should leave the cached pool alone (it is bounded by `keep_window_maskmem`/`keep_window_pred_masks`, not by video length).
 
 ### PyTorch / Memory
 

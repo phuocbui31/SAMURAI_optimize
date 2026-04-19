@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-import gc
 import warnings
 from collections import OrderedDict
 
@@ -663,8 +662,6 @@ class SAM2VideoPredictor(SAM2Base):
             keep_start = max(0, oldest_allowed_maskmem)
             keep_end = newest_cond + keep_window_maskmem + 1
             images_container.evict_old_frames(keep_start, keep_end)
-
-        gc.collect()
 
     def append_frame_as_cond_frame(self, inference_state, frame_idx):
         """

@@ -249,7 +249,7 @@ Any code modifying inference memory paths must:
 - **Invariants**: In hot loops, use `assert` for things that should never fire in production.
 - **Recoverable Conditions**: Use explicit checks (`if x is None: raise ...`).
 - **Logging**: Use `loguru` (already a dependency) in new code; `print` acceptable in scripts with `tqdm.write` inside progress bars.
-- **GPU Memory**: Always free deterministically: `del tensor; gc.collect(); torch.cuda.empty_cache()`.
+- **GPU Memory**: Free deterministically: `del tensor` hoặc gán `= None` là đủ để CUDA caching allocator reclaim block ngay trong cùng tick (PyTorch tensors không tạo reference cycle). **Không** gọi `gc.collect()` trong hot inference loop — nó CPU-bound, không release GIL và stall prefetcher. Chỉ gọi `torch.cuda.empty_cache()` khi GPU share với process khác; với job dedicated, cached pool ổn định (bounded bởi `keep_window_*`) và không cần shrink thủ công.
 
 ## Architecture Highlights
 
