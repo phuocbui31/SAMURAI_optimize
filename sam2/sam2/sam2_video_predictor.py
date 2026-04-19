@@ -719,9 +719,16 @@ class SAM2VideoPredictor(SAM2Base):
             if iou is None or obj is None:
                 continue
             try:
-                iou_val = iou.item()
-                obj_val = obj.item()
-                kf_val = kf.item() if kf is not None else None
+                # Batch GPU->CPU sync: gom 3 scalar thành 1 transfer để cắt
+                # 2 implicit cuda.synchronize() per iteration. iou/obj đã được
+                # guard không None ở phía trên; kf có thể None → branch riêng.
+                if kf is not None:
+                    iou_val, obj_val, kf_val = (
+                        torch.stack([iou, obj, kf]).cpu().tolist()
+                    )
+                else:
+                    iou_val, obj_val = torch.stack([iou, obj]).cpu().tolist()
+                    kf_val = None
             except (AttributeError, RuntimeError):
                 continue
             if (
