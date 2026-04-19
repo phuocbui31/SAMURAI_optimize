@@ -5,7 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 import os
+import threading
 import warnings
+from collections import OrderedDict
 from threading import Thread
 
 import numpy as np
@@ -115,7 +117,7 @@ class AsyncVideoFrameLoader:
         img_mean,
         img_std,
         compute_device,
-        max_cache_frames=10,
+        max_cache_frames=60,
     ):
         self.img_paths = img_paths
         self.image_size = image_size
@@ -125,8 +127,11 @@ class AsyncVideoFrameLoader:
         self.max_cache_frames = max_cache_frames
         # items in `self.images` will be loaded asynchronously
         self.images = [None] * len(img_paths)
-        # Track loading order for LRU eviction
-        self.loaded_indices = []
+        # Track loading order for LRU eviction (OrderedDict acts as an ordered set)
+        self.loaded_indices = OrderedDict()
+        # Lock guarding in-memory cache state (self.images + self.loaded_indices).
+        # I/O (disk read / decode) happens OUTSIDE the lock to avoid serializing reads.
+        self._cache_lock = threading.Lock()
         # catch and raise any exceptions in the async loading thread
         self.exception = None
         # video_height and video_width be filled when loading the first image
@@ -134,78 +139,131 @@ class AsyncVideoFrameLoader:
         self.video_width = None
         self.compute_device = compute_device
 
+        # Rolling prefetcher state: keep the next ~prefetch_ahead frames hot ahead
+        # of propagate_in_video's current frame.
+        self._current_frame_idx = 0
+        self._prefetch_ahead = 20
+        self._stop_event = threading.Event()
+
         # load the first frame to fill video_height and video_width and also
         # to cache it (since it's most likely where the user will click)
         self.__getitem__(0)
 
-        # load frames in range [1, max_cache_frames] asynchronously
-        # Remaining frames will be loaded on-demand to save memory
-        num_init_frames = min(max_cache_frames, len(self.img_paths))
-        def _load_frames():
-            try:
-                for n in tqdm(range(1, num_init_frames), desc="frame loading (JPEG)"):
-                    self.__getitem__(n)
-            except Exception as e:
-                self.exception = e
-
-        self.thread = Thread(target=_load_frames, daemon=True)
+        self.thread = Thread(
+            target=self._prefetch_loop,
+            daemon=True,
+            name="AsyncVideoFrameLoader-prefetch",
+        )
         self.thread.start()
+
+    def update_current_frame(self, idx):
+        """Inform the prefetcher which frame propagate_in_video is processing."""
+        self._current_frame_idx = int(idx)
+
+    def _prefetch_loop(self):
+        try:
+            while not self._stop_event.is_set():
+                cur = self._current_frame_idx
+                end = min(cur + self._prefetch_ahead, len(self.img_paths))
+                did_work = False
+                for i in range(cur, end):
+                    if self._stop_event.is_set():
+                        return
+                    if self.images[i] is None:
+                        self[i]  # triggers __getitem__ load + LRU eviction
+                        did_work = True
+                if not did_work:
+                    self._stop_event.wait(timeout=0.005)
+        except Exception as e:
+            self.exception = e
+
+    def close(self):
+        """Signal the prefetch thread to exit and wait briefly for it to stop."""
+        self._stop_event.set()
+        if self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def __getitem__(self, index):
         if self.exception is not None:
             raise RuntimeError("Failure in frame loading thread") from self.exception
 
-        img = self.images[index]
-        if img is not None:
-            # Move accessed frame to end of LRU list (most recently used)
-            if index in self.loaded_indices:
-                self.loaded_indices.remove(index)
-            self.loaded_indices.append(index)
-            return img
+        with self._cache_lock:
+            img = self.images[index]
+            if img is not None:
+                # Move accessed frame to end of LRU (most recently used)
+                self.loaded_indices.move_to_end(index)
+                return img
 
-        # LRU Eviction: if we're at max capacity, evict the oldest frame
-        if len(self.loaded_indices) >= self.max_cache_frames:
-            self._evict_oldest_frame()
+            # LRU Eviction: if we're at max capacity, evict the oldest frame
+            if len(self.loaded_indices) >= self.max_cache_frames:
+                self._evict_oldest_frame_locked()
 
+        # I/O outside the cache lock (disk read + decode + optional device copy).
         img, video_height, video_width = _load_img_as_tensor(
             self.img_paths[index], self.image_size
         )
-        self.video_height = video_height
-        self.video_width = video_width
         # normalize by mean and std
         img -= self.img_mean
         img /= self.img_std
         if not self.offload_video_to_cpu:
             img = img.to(self.compute_device, non_blocking=True)
-        self.images[index] = img
-        self.loaded_indices.append(index)
+
+        with self._cache_lock:
+            # video dims are constant across frames; set once
+            self.video_height = video_height
+            self.video_width = video_width
+            # another thread may have populated it while we were doing I/O
+            existing = self.images[index]
+            if existing is not None:
+                self.loaded_indices.move_to_end(index)
+                return existing
+            self.images[index] = img
+            self.loaded_indices[index] = None
         return img
+
+    def _evict_oldest_frame_locked(self):
+        """Evict the oldest (least recently used) frame. Caller must hold _cache_lock."""
+        if not self.loaded_indices:
+            return
+        oldest_idx, _ = self.loaded_indices.popitem(last=False)
+        self.images[oldest_idx] = None
 
     def _evict_oldest_frame(self):
         """Evict the oldest (least recently used) frame to free memory."""
-        if not self.loaded_indices:
-            return
-        oldest_idx = self.loaded_indices.pop(0)
-        self.images[oldest_idx] = None
+        with self._cache_lock:
+            self._evict_oldest_frame_locked()
 
     def evict_old_frames(self, keep_start, keep_end):
         """
         Evict all frames outside the keep range [keep_start, keep_end).
         Called by release_old_frames() in the predictor.
         """
-        for i in range(len(self.images)):
-            if i < keep_start or i >= keep_end:
-                if self.images[i] is not None:
+        with self._cache_lock:
+            to_drop = [
+                i for i in list(self.loaded_indices) if i < keep_start or i >= keep_end
+            ]
+            for i in to_drop:
+                self.images[i] = None
+                self.loaded_indices.pop(i, None)
+            # also clear any stale entries in self.images outside range that
+            # somehow escaped loaded_indices tracking
+            for i in range(len(self.images)):
+                if (i < keep_start or i >= keep_end) and self.images[i] is not None:
                     self.images[i] = None
-                    if i in self.loaded_indices:
-                        self.loaded_indices.remove(i)
 
     def set_max_cache(self, max_frames):
         """Update the maximum number of frames to cache."""
-        self.max_cache_frames = max_frames
-        # Evict if currently over the new limit
-        while len(self.loaded_indices) > self.max_cache_frames:
-            self._evict_oldest_frame()
+        with self._cache_lock:
+            self.max_cache_frames = max_frames
+            # Evict if currently over the new limit
+            while len(self.loaded_indices) > self.max_cache_frames:
+                self._evict_oldest_frame_locked()
 
     def __len__(self):
         return len(self.images)
@@ -219,12 +277,12 @@ def load_video_frames(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
-    max_cache_frames=10,
+    max_cache_frames=60,
 ):
     """
     Load the video frames from video_path. The frames are resized to image_size as in
     the model and are loaded to GPU if offload_video_to_cpu=False. This is used by the demo.
-    
+
     Args:
         max_cache_frames: Maximum number of frames to keep in RAM for Input Streaming.
                           Only applies to JPEG folder loading with async_loading_frames=True.
@@ -266,7 +324,7 @@ def load_video_frames_from_jpg_images(
     img_std=(0.229, 0.224, 0.225),
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
-    max_cache_frames=10,
+    max_cache_frames=60,
 ):
     """
     Load the video frames from a directory of JPEG files ("<frame_index>.jpg" format).
@@ -275,7 +333,7 @@ def load_video_frames_from_jpg_images(
     `offload_video_to_cpu` is `False` and to CPU if `offload_video_to_cpu` is `True`.
 
     You can load a frame asynchronously by setting `async_loading_frames` to `True`.
-    
+
     Args:
         max_cache_frames: Maximum number of frames to keep in RAM for Input Streaming.
                           Only applies when async_loading_frames=True.

@@ -47,7 +47,7 @@ class SAM2VideoPredictor(SAM2Base):
         offload_video_to_cpu=False,
         offload_state_to_cpu=False,
         async_loading_frames=False,
-        max_cache_frames=10,
+        max_cache_frames=60,
     ):
         """Initialize an inference state."""
         compute_device = self.device  # device of the model
@@ -885,7 +885,15 @@ class SAM2VideoPredictor(SAM2Base):
             )
             processing_order = range(start_frame_idx, end_frame_idx + 1)
 
+        # Inform the frame loader (if it's the async prefetcher) which frame we are
+        # currently at, so it can keep the upcoming window hot. For the preload path
+        # where `images` is a plain tensor, getattr returns None and the call is skipped.
+        images = inference_state["images"]
+        _update_fn = getattr(images, "update_current_frame", None)
+
         for frame_idx in tqdm(processing_order, desc="propagate in video"):
+            if _update_fn is not None:
+                _update_fn(frame_idx)
             # We skip those frames already in consolidated outputs (these are frames
             # that received input clicks or mask). Note that we cannot directly run
             # batched forward on them via `_run_single_frame_inference` because the

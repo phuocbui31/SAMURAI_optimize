@@ -82,8 +82,8 @@ parser.add_argument(
 parser.add_argument(
     "--max_cache_frames",
     type=int,
-    default=10,
-    help="Số images tối đa giữ trong RAM (LRU cache). Mặc định: 10",
+    default=60,
+    help="Số images tối đa giữ trong RAM (LRU cache). Mặc định: 60",
 )
 parser.add_argument(
     "--model_name",
