@@ -89,7 +89,7 @@ parser.add_argument(
     "--model_name",
     type=str,
     default="base_plus",
-    choices=["base_plus", "small", "tiny"],
+    choices=["base_plus", "small", "tiny", "large"],
     help="Model size (mặc định: base_plus)",
 )
 parser.add_argument(
@@ -234,9 +234,9 @@ try:
                 mask_to_vis = {}
                 bbox_to_vis = {}
 
-                assert len(masks) == 1 and len(object_ids) == 1, (
-                    "Only one object is supported right now"
-                )
+                assert (
+                    len(masks) == 1 and len(object_ids) == 1
+                ), "Only one object is supported right now"
                 for obj_id, mask in zip(object_ids, masks):
                     mask = mask[0].cpu().numpy()
                     mask = mask > 0.0
