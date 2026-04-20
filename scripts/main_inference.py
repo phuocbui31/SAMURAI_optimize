@@ -110,6 +110,24 @@ parser.add_argument(
     default=False,
     help="Tính metric LaSOT (AUC/OP50/OP75/Prec@20/NormPrec@0.20) sau mỗi video và in bảng tổng cuối.",
 )
+parser.add_argument(
+    "--log_metrics",
+    action="store_true",
+    default=False,
+    help="Bật ghi metric per-frame (iter/s, RAM, VRAM) ra CSV.",
+)
+parser.add_argument(
+    "--metrics_dir",
+    type=str,
+    default=None,
+    help="Thư mục gốc chứa CSV. Mặc định: metrics/{exp_name}_{model_name}",
+)
+parser.add_argument(
+    "--run_tag",
+    type=str,
+    default="default",
+    help="Subdir dưới metrics_dir để phân biệt baseline/optimized run.",
+)
 args = parser.parse_args()
 
 if args.evaluate:
@@ -122,6 +140,9 @@ if args.evaluate:
     )
 
     all_video_metrics = {}
+
+if args.log_metrics:
+    from metrics_logger import MetricsLogger
 
 color = [
     (255, 0, 0),
@@ -147,6 +168,13 @@ else:
 
 video_folder = data_root
 pred_folder = f"results/{exp_name}/{exp_name}_{model_name}"
+
+if args.log_metrics:
+    metrics_dir = (
+        args.metrics_dir
+        if args.metrics_dir
+        else osp.join("metrics", f"{exp_name}_{model_name}")
+    )
 
 save_to_video = True
 if save_to_video:
@@ -179,6 +207,12 @@ try:
         predictor = build_sam2_video_predictor(model_cfg, checkpoint, device="cuda:0")
 
         predictions = []
+
+        if args.log_metrics:
+            csv_path = osp.join(metrics_dir, args.run_tag, f"{video_basename}.csv")
+            metrics_logger = MetricsLogger(csv_path)
+        else:
+            metrics_logger = None
 
         if save_to_video:
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -231,12 +265,14 @@ try:
             for frame_idx, object_ids, masks in predictor.propagate_in_video(
                 state, **propagate_kwargs
             ):
+                if metrics_logger is not None:
+                    metrics_logger.log(frame_idx)
                 mask_to_vis = {}
                 bbox_to_vis = {}
 
-                assert (
-                    len(masks) == 1 and len(object_ids) == 1
-                ), "Only one object is supported right now"
+                assert len(masks) == 1 and len(object_ids) == 1, (
+                    "Only one object is supported right now"
+                )
                 for obj_id, mask in zip(object_ids, masks):
                     mask = mask[0].cpu().numpy()
                     mask = mask > 0.0
@@ -286,6 +322,9 @@ try:
 
         if save_to_video:
             out.release()
+
+        if metrics_logger is not None:
+            metrics_logger.close()
 
         if args.evaluate:
             seq_dir = osp.join(video_folder, cat_name, video.strip())
