@@ -95,7 +95,7 @@ pip install -e .                    # Core package
 pip install -e ".[notebooks]"       # Notebook dependencies (optional)
 
 # 2. Install additional dependencies
-pip install matplotlib==3.7 tikzplotlib jpeg4py opencv-python lmdb pandas scipy loguru
+pip install matplotlib==3.7 tikzplotlib jpeg4py opencv-python lmdb pandas scipy loguru psutil
 
 # 3. Download SAM 2.1 checkpoints
 cd checkpoints && ./download_ckpts.sh && cd ..
@@ -140,6 +140,9 @@ python scripts/main_inference.py \
   [--promote_search_window 50]      # Backward search window for candidate (default: 50)
   [--max_auto_promoted_cond_frames 4]  # Cap of auto-promoted cond frames (default: 4)
   [--evaluate]                      # In LaSOT metrics (AUC/OP50/OP75/Prec@20/NormPrec@0.20) sau mỗi video + bảng tổng cuối (default: off)
+  [--log_metrics]                   # Ghi metric per-frame (iter/s, RAM, VRAM) ra CSV (default: off)
+  [--metrics_dir <path>]            # Thư mục gốc chứa CSV (default: metrics/{exp_name}_{model_name})
+  [--run_tag <tag>]                 # Subdir dưới metrics_dir để phân biệt baseline/optimized (default: "default")
 ```
 
 This script:
@@ -360,6 +363,49 @@ Per-video metrics in ngay sau khi track xong; bảng tổng + dòng MEAN in ở 
 `load_lasot_visibility(seq_dir, num_frames)` đọc `full_occlusion.txt` + `out_of_view.txt`; trả mask all-True kèm warning nếu file thiếu/lệch shape (tránh crash `~target_visible` trong `calc_seq_err_robust` khi `dataset='lasot'`).
 
 AST smoke test: `tests/test_evaluate_cli.py` — verify `--evaluate` flag, default False, wiring sang `eval_utils`, reuse `calc_seq_err_robust`, và `try/finally` cho summary.
+
+### Metrics Logging & Plotting (`scripts/metrics_logger.py`, `scripts/plot_metrics.py`)
+
+Opt-in cơ chế ghi metric per-frame ra CSV trong khi inference, kèm script standalone vẽ line chart overlay nhiều run (vd baseline samurai gốc vs optimized).
+
+**Bật log:** thêm `--log_metrics --run_tag <tag>` vào `scripts/main_inference.py` (cả bản optimized lẫn bản baseline `samurai/scripts/main_inference.py` đều support). Mặc định off → 0 overhead, 0 import thêm.
+
+**Schema CSV (7 cột, 1 file/video):**
+
+| Cột | Nguồn |
+|-----|-------|
+| `frame_idx` | tham số của `MetricsLogger.log()` |
+| `wall_time_s` | `time.perf_counter() - start` |
+| `dt_ms`, `iter_per_sec` | derive từ delta giữa 2 lần `log()`; frame 0 = NaN |
+| `ram_mb` | `psutil.Process(pid).memory_info().rss / 1e6` |
+| `vram_alloc_mb`, `vram_peak_mb` | `torch.cuda.memory_allocated/max_memory_allocated()` (0 nếu không có CUDA) |
+
+File mở `buffering=1` (line-buffered) → crash giữa chừng vẫn flush được. `MetricsLogger.close()` idempotent. Overhead ~50-100µs/frame, < 0.05% với LaSOT 2-3 it/s trên T4.
+
+**Vẽ biểu đồ:**
+
+```bash
+# 2 PNG/video (iter_per_sec.png + memory.png), overlay nhiều run
+python scripts/plot_metrics.py \
+    --run metrics/.../baseline --run metrics/.../optimized \
+    --label Baseline --label Optimized --mode per_video [--smooth 20] [--video <name>]
+
+# 1 chart cho cả run (concat tất cả video, x = global frame index, vạch dọc tại biên video)
+python scripts/plot_metrics.py --run ... --run ... --label ... --label ... --mode concat
+```
+
+`memory.png`: 1 axes, mỗi run 1 màu, RAM = solid, VRAM = dashed (legend `"{label} - RAM"` / `"{label} - VRAM"`). Output PNG ở `plots/<timestamp>/per_video/<video>/` hoặc `plots/<timestamp>/concat/`. `matplotlib.use("Agg")` đặt trước `import pyplot` → headless-safe.
+
+**Mở rộng schema sau này:** append cột mới (vd `gpu_util_pct`) vào CSV — `pandas.read_csv` cũ vẫn parse được; `plot_metrics.py` chỉ truy cập cột theo tên nên backward-compat.
+
+**Scripts duplicate ở 2 nơi:** `scripts/metrics_logger.py` + `scripts/plot_metrics.py` ở root cho bản optimized; `samurai/scripts/{metrics_logger,plot_metrics}.py` cho bản baseline bundled. Phải giữ byte-identical (verify bằng `diff`).
+
+AST smoke tests:
+- `tests/test_metrics_logger.py` — runtime test (3 frame logs → 4 row CSV, NaN frame 0, idempotent close) + AST class signature.
+- `tests/test_plot_metrics_cli.py` — verify CLI flags + `--mode {per_video, concat}` choices + functions `parse_args`, `load_run`, `plot_per_video`, `plot_concat`, `main`.
+- `tests/test_main_inference_log_metrics.py` — verify cả 2 main_inference.py đều có `--log_metrics`/`--metrics_dir`/`--run_tag` flags + token `MetricsLogger`/`.log(`/`.close()`.
+
+Spec & plan: `docs/superpowers/specs/2026-04-20-metrics-logging-design.md`, `docs/superpowers/plans/2026-04-20-metrics-logging-plan.md`.
 
 ## FAQ & Troubleshooting
 

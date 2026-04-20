@@ -16,7 +16,7 @@ Guidance for agentic coding agents working in this repository (SAMURAI optimized
 ```bash
 # Python >= 3.10, torch >= 2.3.1, torchvision >= 0.18.1
 cd sam2 && pip install -e . && pip install -e ".[notebooks]"
-pip install matplotlib==3.7 tikzplotlib jpeg4py opencv-python lmdb pandas scipy loguru
+pip install matplotlib==3.7 tikzplotlib jpeg4py opencv-python lmdb pandas scipy loguru psutil
 ```
 
 Checkpoints: `cd sam2/checkpoints && ./download_ckpts.sh`.
