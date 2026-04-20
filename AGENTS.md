@@ -27,6 +27,8 @@ Checkpoints: `cd sam2/checkpoints && ./download_ckpts.sh`.
 - With LaSOT eval: add `--evaluate` — tính AUC / OP50 / OP75 / Prec@20 / NormPrec@0.20 sau từng video và in bảng tổng hợp ở cuối (default False). Predictions + mp4 visualization vẫn ghi ra như trước. Xem `scripts/eval_utils.py`.
 - Multi-GPU (8 chunks): `bash scripts/inference.sh` (uses `CUDA_VISIBLE_DEVICES`).
 - Demo on a video: `python scripts/demo.py --video_path <video.mp4|frames_dir> --txt_path <bbox.txt>` (bbox is `x,y,w,h`, one line).
+- Log per-frame metric: thêm `--log_metrics --run_tag <tag>` (mặc định ghi vào `metrics/{exp_name}_{model_name}/{run_tag}/<video>.csv`, schema 7 cột `frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,vram_peak_mb`). Override thư mục: `--metrics_dir <path>`. Xem `scripts/metrics_logger.py`.
+- Vẽ biểu đồ so sánh runs: `python scripts/plot_metrics.py --run metrics/.../baseline --run metrics/.../optimized --label Baseline --label Optimized --mode per_video` (hoặc `--mode concat` cho 1 chart toàn run). Output PNG ở `plots/<timestamp>/`. Xem `scripts/plot_metrics.py`.
 
 ## Tests
 
