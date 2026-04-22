@@ -127,6 +127,13 @@ class AsyncVideoFrameLoader:
         self.max_cache_frames = max_cache_frames
         # items in `self.images` will be loaded asynchronously
         self.images = [None] * len(img_paths)
+        # Prefetch hit/miss counters — only main-thread accesses are counted.
+        # A "miss" = propagate_in_video asked for a frame whose tensor had not
+        # yet been prefetched, forcing a synchronous decode on the critical path.
+        # A sustained high miss rate is direct evidence that the prefetcher
+        # cannot keep up with GPU consumption (I/O / decode bottleneck).
+        self.hit_count = 0
+        self.miss_count = 0
         # Track loading order for LRU eviction (OrderedDict acts as an ordered set)
         self.loaded_indices = OrderedDict()
         # Lock guarding in-memory cache state (self.images + self.loaded_indices).
@@ -146,8 +153,9 @@ class AsyncVideoFrameLoader:
         self._stop_event = threading.Event()
 
         # load the first frame to fill video_height and video_width and also
-        # to cache it (since it's most likely where the user will click)
-        self.__getitem__(0)
+        # to cache it (since it's most likely where the user will click).
+        # Use count_stats=False so this bootstrap load doesn't bias hit/miss stats.
+        self._get(0, count_stats=False)
 
         self.thread = Thread(
             target=self._prefetch_loop,
@@ -170,7 +178,9 @@ class AsyncVideoFrameLoader:
                     if self._stop_event.is_set():
                         return
                     if self.images[i] is None:
-                        self[i]  # triggers __getitem__ load + LRU eviction
+                        self._get(
+                            i, count_stats=False
+                        )  # background fill — don't bias counters
                         did_work = True
                 if not did_work:
                     self._stop_event.wait(timeout=0.005)
@@ -190,6 +200,10 @@ class AsyncVideoFrameLoader:
             pass
 
     def __getitem__(self, index):
+        # Public access path = main thread = counts toward hit/miss stats.
+        return self._get(index, count_stats=True)
+
+    def _get(self, index, count_stats):
         if self.exception is not None:
             raise RuntimeError("Failure in frame loading thread") from self.exception
 
@@ -198,8 +212,12 @@ class AsyncVideoFrameLoader:
             if img is not None:
                 # Move accessed frame to end of LRU (most recently used)
                 self.loaded_indices.move_to_end(index)
+                if count_stats:
+                    self.hit_count += 1
                 return img
 
+            if count_stats:
+                self.miss_count += 1
             # LRU Eviction: if we're at max capacity, evict the oldest frame
             if len(self.loaded_indices) >= self.max_cache_frames:
                 self._evict_oldest_frame_locked()
@@ -264,6 +282,26 @@ class AsyncVideoFrameLoader:
             # Evict if currently over the new limit
             while len(self.loaded_indices) > self.max_cache_frames:
                 self._evict_oldest_frame_locked()
+
+    def get_cache_stats(self):
+        """Return (hits, misses, miss_rate) for main-thread cache accesses only.
+
+        Prefetch-thread fills intentionally bypass the counters (see `_get`), so
+        `miss_rate` here reflects only the critical path: how often
+        propagate_in_video had to wait for a synchronous decode.
+        """
+        with self._cache_lock:
+            hits = self.hit_count
+            misses = self.miss_count
+        total = hits + misses
+        miss_rate = (misses / total) if total > 0 else 0.0
+        return hits, misses, miss_rate
+
+    def reset_cache_stats(self):
+        """Zero hit/miss counters (call right before propagation to measure only the tracking phase)."""
+        with self._cache_lock:
+            self.hit_count = 0
+            self.miss_count = 0
 
     def __len__(self):
         return len(self.images)

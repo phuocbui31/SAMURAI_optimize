@@ -86,6 +86,18 @@ parser.add_argument(
     help="Số images tối đa giữ trong RAM (LRU cache). Mặc định: 60",
 )
 parser.add_argument(
+    "--preload_frames",
+    action="store_true",
+    default=False,
+    help=(
+        "Preload toàn bộ video vào 1 tensor CPU trước khi propagate "
+        "(async_loading_frames=False, giống SAMURAI demo.py). "
+        "Loại bỏ I/O bottleneck để cô lập compute time. "
+        "CẢNH BÁO: tốn ~12 MB/frame RAM (LaSOT 2000 frame ≈ 24 GB). "
+        "Khi bật, --max_cache_frames và prefetch không có tác dụng."
+    ),
+)
+parser.add_argument(
     "--model_name",
     type=str,
     default="base_plus",
@@ -225,12 +237,16 @@ try:
 
         # Start processing frames
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+            # --preload_frames: loại bỏ I/O khỏi critical path để benchmark compute.
+            # Khi bật, init_state chạy nhánh sync trong load_video_frames_from_jpg_images
+            # (load toàn bộ vào 1 tensor CPU), không có prefetch thread, không evict.
+            async_loading = not args.preload_frames
             if args.optimized:
                 state = predictor.init_state(
                     frame_folder,
                     offload_video_to_cpu=True,
                     offload_state_to_cpu=False,
-                    async_loading_frames=True,
+                    async_loading_frames=async_loading,
                     max_cache_frames=args.max_cache_frames,
                 )
             else:
@@ -238,9 +254,15 @@ try:
                     frame_folder,
                     offload_video_to_cpu=True,
                     offload_state_to_cpu=True,
-                    async_loading_frames=True,
+                    async_loading_frames=async_loading,
                     max_cache_frames=args.max_cache_frames,
                 )
+
+            # Reset prefetch hit/miss counters so per-video stats reflect only
+            # the propagate phase (bootstrap loads in init_state are excluded).
+            images_obj = state["images"]
+            if hasattr(images_obj, "reset_cache_stats"):
+                images_obj.reset_cache_stats()
 
             prompts = load_lasot_gt(
                 osp.join(video_folder, cat_name, video.strip(), "groundtruth.txt")
@@ -325,6 +347,16 @@ try:
 
         if metrics_logger is not None:
             metrics_logger.close()
+
+        # Log prefetch cache stats (only meaningful for AsyncVideoFrameLoader,
+        # i.e. when --preload_frames is OFF). High miss_rate ⇒ prefetcher fell
+        # behind GPU consumption ⇒ I/O is on the critical path.
+        if hasattr(images_obj, "get_cache_stats"):
+            hits, misses, miss_rate = images_obj.get_cache_stats()
+            print(
+                f"\033[96m[Cache] {video_basename}: hits={hits} misses={misses} "
+                f"miss_rate={miss_rate:.2%}\033[0m"
+            )
 
         if args.evaluate:
             seq_dir = osp.join(video_folder, cat_name, video.strip())
