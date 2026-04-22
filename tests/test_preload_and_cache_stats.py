@@ -12,20 +12,35 @@ assert "--preload_frames" in cli_src, (
 assert "args.preload_frames" in cli_src, (
     "main_inference.py must read args.preload_frames"
 )
-# async_loading_frames must be driven by the flag (not hardcoded True)
-assert "async_loading_frames=async_loading" in cli_src, (
-    "async_loading_frames must be set from `async_loading = not args.preload_frames`"
+# Both init_state() call sites (optimized + baseline branches) must honor the
+# flag — a half-revert that leaves one branch hardcoded would silently break
+# benchmark mode for that branch.
+assert cli_src.count("async_loading_frames=async_loading") >= 2, (
+    "both init_state() call sites must pass async_loading_frames=async_loading"
+)
+# Negative guard: catches the exact regression of someone re-hardcoding True.
+assert "async_loading_frames=True" not in cli_src, (
+    "async_loading_frames must not be hardcoded True anymore — drive it from --preload_frames"
 )
 assert "not args.preload_frames" in cli_src, (
     "async_loading must be derived from `not args.preload_frames`"
 )
-# Cache-stats logging must exist and be gated on the method
+# Cache-stats logging must exist AND be hasattr-gated so preload mode (plain
+# tensor, no get_cache_stats method) does not crash.
 assert "get_cache_stats" in cli_src, (
     "main_inference.py must log cache stats via get_cache_stats()"
 )
 assert "reset_cache_stats" in cli_src, (
     "main_inference.py must reset_cache_stats() before propagate"
 )
+assert (
+    'hasattr(images_obj, "get_cache_stats")' in cli_src
+    or "hasattr(images_obj, 'get_cache_stats')" in cli_src
+), "get_cache_stats() call must be hasattr-gated to support --preload_frames"
+assert (
+    'hasattr(images_obj, "reset_cache_stats")' in cli_src
+    or "hasattr(images_obj, 'reset_cache_stats')" in cli_src
+), "reset_cache_stats() call must be hasattr-gated to support --preload_frames"
 
 
 # -------- AsyncVideoFrameLoader: counters + reset/get API --------

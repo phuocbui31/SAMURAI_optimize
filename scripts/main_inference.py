@@ -258,11 +258,11 @@ try:
                     max_cache_frames=args.max_cache_frames,
                 )
 
-            # Reset prefetch hit/miss counters so per-video stats reflect only
-            # the propagate phase (bootstrap loads in init_state are excluded).
+            # Capture images container reference for later cache-stats logging.
+            # Note: reset_cache_stats() is deferred until just before the
+            # propagate loop so that frame-0 access from add_new_points_or_box
+            # is excluded from the per-video stats.
             images_obj = state["images"]
-            if hasattr(images_obj, "reset_cache_stats"):
-                images_obj.reset_cache_stats()
 
             prompts = load_lasot_gt(
                 osp.join(video_folder, cat_name, video.strip(), "groundtruth.txt")
@@ -284,6 +284,13 @@ try:
                 propagate_kwargs["max_auto_promoted_cond_frames"] = (
                     args.max_auto_promoted_cond_frames
                 )
+
+            # Reset prefetch hit/miss counters right before propagate so per-video
+            # stats measure ONLY the tracking phase (excludes init_state bootstrap
+            # and add_new_points_or_box frame-0 access).
+            if hasattr(images_obj, "reset_cache_stats"):
+                images_obj.reset_cache_stats()
+
             for frame_idx, object_ids, masks in predictor.propagate_in_video(
                 state, **propagate_kwargs
             ):
