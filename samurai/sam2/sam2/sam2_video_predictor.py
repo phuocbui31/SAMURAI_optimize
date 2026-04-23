@@ -844,6 +844,66 @@ class SAM2VideoPredictor(SAM2Base):
         )
         return frame_idx, obj_ids, video_res_masks
 
+    def get_state_size_stats(self, inference_state) -> dict:
+        """Return memory accounting of inference_state output_dict.
+
+        Walks output_dict (cond + non_cond) and output_dict_per_obj. Sums
+        bytes of maskmem_features, maskmem_pos_enc, and pred_masks tensors.
+
+        Returns dict with keys:
+        - n_cond, n_non_cond
+        - maskmem_features_bytes, maskmem_pos_enc_bytes, pred_masks_bytes
+        - total_bytes
+        """
+        output_dict = inference_state.get("output_dict", {})
+        cond_outputs = output_dict.get("cond_frame_outputs", {})
+        non_cond_outputs = output_dict.get("non_cond_frame_outputs", {})
+        per_obj = inference_state.get("output_dict_per_obj", {})
+
+        feat_bytes = 0
+        pos_bytes = 0
+        mask_bytes = 0
+
+        def _tensor_bytes(t):
+            try:
+                return t.element_size() * t.numel()
+            except (AttributeError, RuntimeError):
+                return 0
+
+        def _walk_entries(entries):
+            nonlocal feat_bytes, pos_bytes, mask_bytes
+            for entry in entries.values():
+                if entry is None:
+                    continue
+                feat = entry.get("maskmem_features")
+                if feat is not None:
+                    feat_bytes += _tensor_bytes(feat)
+                pos = entry.get("maskmem_pos_enc")
+                if pos is not None:
+                    if isinstance(pos, (list, tuple)):
+                        for p in pos:
+                            pos_bytes += _tensor_bytes(p)
+                    else:
+                        pos_bytes += _tensor_bytes(pos)
+                pm = entry.get("pred_masks")
+                if pm is not None:
+                    mask_bytes += _tensor_bytes(pm)
+
+        _walk_entries(cond_outputs)
+        _walk_entries(non_cond_outputs)
+        for obj_dict in per_obj.values():
+            _walk_entries(obj_dict.get("cond_frame_outputs", {}))
+            _walk_entries(obj_dict.get("non_cond_frame_outputs", {}))
+
+        return {
+            "n_cond": len(cond_outputs),
+            "n_non_cond": len(non_cond_outputs),
+            "maskmem_features_bytes": feat_bytes,
+            "maskmem_pos_enc_bytes": pos_bytes,
+            "pred_masks_bytes": mask_bytes,
+            "total_bytes": feat_bytes + pos_bytes + mask_bytes,
+        }
+
     @torch.inference_mode()
     def reset_state(self, inference_state):
         """Remove all input points or mask in all frames throughout the video."""
@@ -955,7 +1015,7 @@ class SAM2VideoPredictor(SAM2Base):
         if maskmem_features is not None:
             maskmem_features = maskmem_features.to(torch.bfloat16)
             maskmem_features = maskmem_features.to(storage_device, non_blocking=True)
-        pred_masks_gpu = current_out["pred_masks"] # (B, 1, H, W)
+        pred_masks_gpu = current_out["pred_masks"]  # (B, 1, H, W)
         # potentially fill holes in the predicted masks
         if self.fill_hole_area > 0:
             pred_masks_gpu = fill_holes_in_mask_scores(
@@ -971,8 +1031,8 @@ class SAM2VideoPredictor(SAM2Base):
         best_kf_score = current_out["kf_ious"]
         # make a compact version of this frame's output to reduce the state size
         compact_current_out = {
-            "maskmem_features": maskmem_features, # (B, C, H, W)
-            "maskmem_pos_enc": maskmem_pos_enc, 
+            "maskmem_features": maskmem_features,  # (B, C, H, W)
+            "maskmem_pos_enc": maskmem_pos_enc,
             "pred_masks": pred_masks,
             "obj_ptr": obj_ptr,
             "object_score_logits": object_score_logits,

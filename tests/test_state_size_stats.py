@@ -105,3 +105,33 @@ assert (
     'hasattr(predictor, "get_state_size_stats")' in cli_src
     or "hasattr(predictor, 'get_state_size_stats')" in cli_src
 ), "get_state_size_stats() call must be hasattr-gated"
+
+
+# -------- samurai/ baseline predictor: same get_state_size_stats method --------
+samurai_predictor_path = pathlib.Path("samurai/sam2/sam2/sam2_video_predictor.py")
+samurai_predictor_src = samurai_predictor_path.read_text()
+samurai_tree = ast.parse(samurai_predictor_src)
+
+found_samurai_method = False
+for node in ast.walk(samurai_tree):
+    if isinstance(node, ast.ClassDef) and node.name == "SAM2VideoPredictor":
+        for item in node.body:
+            if (
+                isinstance(item, ast.FunctionDef)
+                and item.name == "get_state_size_stats"
+            ):
+                found_samurai_method = True
+                arg_names = [a.arg for a in item.args.args]
+                assert "inference_state" in arg_names
+                src = ast.get_source_segment(samurai_predictor_src, item)
+                assert "cond_frame_outputs" in src
+                assert "non_cond_frame_outputs" in src
+                assert "maskmem_features" in src
+                assert "maskmem_pos_enc" in src
+                assert "pred_masks" in src
+                assert "element_size" in src and "numel" in src
+                break
+        break
+assert found_samurai_method, (
+    "samurai SAM2VideoPredictor must define get_state_size_stats"
+)
