@@ -82,3 +82,26 @@ for node in ast.walk(logger_tree):
                 break
         break
 assert found_log, "MetricsLogger.log not found"
+
+
+# -------- main_inference.py: --log_state_size flag --------
+cli_path = pathlib.Path("scripts/main_inference.py")
+cli_src = cli_path.read_text()
+
+assert "--log_state_size" in cli_src, (
+    "main_inference.py must expose --log_state_size flag"
+)
+assert "args.log_state_size" in cli_src, (
+    "main_inference.py must read args.log_state_size"
+)
+assert "log_state_size" in cli_src and "log_metrics" in cli_src
+assert "get_state_size_stats" in cli_src, (
+    "main_inference.py must call predictor.get_state_size_stats"
+)
+assert "state_stats=" in cli_src, (
+    "main_inference.py must pass state_stats= into metrics_logger.log()"
+)
+assert (
+    'hasattr(predictor, "get_state_size_stats")' in cli_src
+    or "hasattr(predictor, 'get_state_size_stats')" in cli_src
+), "get_state_size_stats() call must be hasattr-gated"
