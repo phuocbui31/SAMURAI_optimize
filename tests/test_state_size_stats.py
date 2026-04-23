@@ -160,3 +160,17 @@ for node in ast.walk(samurai_logger_tree):
                 break
         break
 assert found_samurai_log, "samurai MetricsLogger.log not found"
+
+
+# -------- samurai/ main_inference.py: --log_state_size flag --------
+samurai_cli_path = pathlib.Path("samurai/scripts/main_inference.py")
+samurai_cli_src = samurai_cli_path.read_text()
+
+assert "--log_state_size" in samurai_cli_src
+assert "args.log_state_size" in samurai_cli_src
+assert "get_state_size_stats" in samurai_cli_src
+assert "state_stats=" in samurai_cli_src
+assert (
+    'hasattr(predictor, "get_state_size_stats")' in samurai_cli_src
+    or "hasattr(predictor, 'get_state_size_stats')" in samurai_cli_src
+), "samurai get_state_size_stats() call must be hasattr-gated"
