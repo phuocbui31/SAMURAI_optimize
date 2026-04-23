@@ -65,7 +65,8 @@ class MetricsLogger:
                 4 new columns (n_non_cond, maskmem_bytes, pred_masks_bytes,
                 total_state_bytes) are populated; otherwise written as empty
                 cells (NOT nan — empty distinguishes "not measured" from
-                "measured but unavailable").
+                "measured but unavailable"). Must be the COMPLETE dict returned
+                by get_state_size_stats(); partial dicts raise KeyError.
         """
         if self._fp is None:
             return
@@ -94,12 +95,17 @@ class MetricsLogger:
             pred_masks_bytes = ""
             total_state_bytes = ""
         else:
-            n_non_cond = state_stats.get("n_non_cond", "")
-            mf = state_stats.get("maskmem_features_bytes", 0)
-            mp = state_stats.get("maskmem_pos_enc_bytes", 0)
-            maskmem_bytes = mf + mp
-            pred_masks_bytes = state_stats.get("pred_masks_bytes", 0)
-            total_state_bytes = state_stats.get("total_bytes", 0)
+            # state_stats must be the complete dict from
+            # SAM2VideoPredictor.get_state_size_stats(). Direct access
+            # surfaces schema mismatches loudly (KeyError) instead of
+            # silently writing 0 for missing fields.
+            n_non_cond = state_stats["n_non_cond"]
+            maskmem_bytes = (
+                state_stats["maskmem_features_bytes"]
+                + state_stats["maskmem_pos_enc_bytes"]
+            )
+            pred_masks_bytes = state_stats["pred_masks_bytes"]
+            total_state_bytes = state_stats["total_bytes"]
 
         self._fp.write(
             f"{frame_idx},{wall_time_s:.6f},{dt_ms},{iter_per_sec},"
