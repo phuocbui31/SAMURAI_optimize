@@ -22,8 +22,10 @@
 | `scripts/metrics_logger.py` | modify | Extend `HEADER` and `log()` to accept `state_stats` (Task 2) |
 | `scripts/main_inference.py` | modify | Add `--log_state_size` flag, wire into propagate loop (Task 3) |
 | `tests/test_state_size_stats.py` | create | AST smoke tests covering all 3 above (Tasks 1, 2, 3) |
+| `reports/2026-04-23-maskmem/plot_maskmem.py` | create | 3 verification charts from instrumented CSV (Task 4) |
+| `reports/2026-04-23-maskmem/README.md` | create | Usage note for visualization (Task 4) |
 
-Each task is fully independent in source location but integration test (Task 4) runs the whole AST suite.
+Each task is fully independent in source location but integration test (Task 5) runs the whole AST suite.
 
 ---
 
@@ -487,7 +489,215 @@ docs/superpowers/specs/2026-04-23-maskmem-instrumentation-design.md."
 
 ---
 
-### Task 4: Final verification
+### Task 4: Visualization script
+
+**Files:**
+- Create: `reports/2026-04-23-maskmem/plot_maskmem.py`
+- Create: `reports/2026-04-23-maskmem/README.md` (1-paragraph usage note)
+
+**Goal:** Render 3 biểu đồ từ CSV instrumented để confirm visually
+giả thuyết tăng tuyến tính.
+
+**Note on dataset:** Script chấp nhận **danh sách CSV path** (1 hoặc
+nhiều) qua `--csv`. Nó tự skip CSV không có cột `n_non_cond` (file cũ).
+Có thể chạy ngay với 1 CSV synthetic để smoke-test trước khi user có
+data thật.
+
+- [ ] **Step 1: Write `plot_maskmem.py`**
+
+```python
+"""Visualize maskmem accumulation from instrumented CSV.
+
+Renders 3 charts to confirm hypothesis that non_cond_frame_outputs
+accumulates one entry per propagated frame, with linear byte growth.
+
+Usage:
+    python3 reports/2026-04-23-maskmem/plot_maskmem.py \
+        --csv path/to/video1.csv path/to/video2.csv \
+        --out reports/2026-04-23-maskmem/figures
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+REQUIRED_COLS = ["n_non_cond", "maskmem_bytes", "pred_masks_bytes",
+                 "total_state_bytes"]
+
+
+def load(csv_path: Path) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    missing = [c for c in REQUIRED_COLS if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{csv_path.name} missing instrumented columns {missing}. "
+            "Re-run with --log_state_size."
+        )
+    # Empty cells in instrumented columns become NaN — drop those rows.
+    df = df.dropna(subset=REQUIRED_COLS)
+    if len(df) == 0:
+        raise ValueError(f"{csv_path.name} has no rows with state_stats data")
+    return df
+
+
+def plot_n_non_cond(dfs: dict[str, pd.DataFrame], out_dir: Path) -> Path:
+    """Plot 1: n_non_cond vs frame_idx — must be linear y=x (or y=x-c)."""
+    fig, ax = plt.subplots(figsize=(11, 6))
+    for name, df in dfs.items():
+        ax.plot(df["frame_idx"], df["n_non_cond"], lw=1.2, label=name)
+    # Reference line y=x
+    max_x = max(df["frame_idx"].max() for df in dfs.values())
+    ax.plot([0, max_x], [0, max_x], "k--", lw=0.8, alpha=0.5,
+            label="y = x (perfect 1 entry/frame)")
+    ax.set_xlabel("frame_idx")
+    ax.set_ylabel("len(non_cond_frame_outputs)")
+    ax.set_title("Hypothesis check: 1 maskmem entry per propagated frame")
+    ax.legend(); ax.grid(alpha=0.3)
+    out = out_dir / "01_n_non_cond.png"
+    fig.tight_layout(); fig.savefig(out, dpi=140); plt.close(fig)
+    return out
+
+
+def plot_bytes_vs_vram(dfs: dict[str, pd.DataFrame], out_dir: Path) -> Path:
+    """Plot 2: total_state_bytes vs VRAM_alloc — must overlap (state_bytes
+    explains the growth in VRAM)."""
+    n = len(dfs)
+    fig, axes = plt.subplots(1, n, figsize=(6 * n, 5), squeeze=False)
+    for ax, (name, df) in zip(axes[0], dfs.items()):
+        bytes_mb = df["total_state_bytes"] / 1e6
+        vram_mb = df["vram_alloc_mb"]
+        ax.plot(df["frame_idx"], vram_mb, color="#1f77b4",
+                label="VRAM alloc (psutil)", lw=1.5)
+        ax.plot(df["frame_idx"], bytes_mb, color="#d62728",
+                label="state bytes (instrumented)", lw=1.0, ls="--")
+        # Compute slope of state bytes
+        if len(df) > 10:
+            slope, intercept = np.polyfit(df["frame_idx"], bytes_mb, 1)
+            ax.text(0.02, 0.95, f"slope = {slope * 1024:.1f} kB/frame",
+                    transform=ax.transAxes, va="top",
+                    bbox=dict(facecolor="white", alpha=0.8))
+        ax.set_title(name)
+        ax.set_xlabel("frame_idx"); ax.set_ylabel("MB")
+        ax.legend(); ax.grid(alpha=0.3)
+    fig.suptitle("State bytes (red) should explain VRAM growth (blue)",
+                 fontsize=12)
+    out = out_dir / "02_bytes_vs_vram.png"
+    fig.tight_layout(); fig.savefig(out, dpi=140); plt.close(fig)
+    return out
+
+
+def plot_components(dfs: dict[str, pd.DataFrame], out_dir: Path) -> Path:
+    """Plot 3: stacked area of byte components per video."""
+    n = len(dfs)
+    fig, axes = plt.subplots(1, n, figsize=(6 * n, 5), squeeze=False)
+    for ax, (name, df) in zip(axes[0], dfs.items()):
+        x = df["frame_idx"].values
+        # maskmem_bytes already sums features+pos_enc in logger
+        maskmem_mb = df["maskmem_bytes"].values / 1e6
+        pred_mb = df["pred_masks_bytes"].values / 1e6
+        ax.stackplot(x, maskmem_mb, pred_mb,
+                     labels=["maskmem (features+pos_enc)", "pred_masks"],
+                     colors=["#1f77b4", "#ff7f0e"], alpha=0.8)
+        ax.set_title(name)
+        ax.set_xlabel("frame_idx"); ax.set_ylabel("MB (cumulative)")
+        ax.legend(loc="upper left"); ax.grid(alpha=0.3)
+    fig.suptitle("Byte breakdown — which component dominates?", fontsize=12)
+    out = out_dir / "03_components.png"
+    fig.tight_layout(); fig.savefig(out, dpi=140); plt.close(fig)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--csv", nargs="+", required=True, type=Path,
+                    help="One or more instrumented CSV files")
+    ap.add_argument("--out", type=Path,
+                    default=Path(__file__).parent / "figures",
+                    help="Output directory for PNG files")
+    args = ap.parse_args()
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    dfs = {p.stem: load(p) for p in args.csv}
+    print(f"Loaded {len(dfs)} CSV(s): {list(dfs.keys())}")
+    print(plot_n_non_cond(dfs, args.out))
+    print(plot_bytes_vs_vram(dfs, args.out))
+    print(plot_components(dfs, args.out))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 2: Write `reports/2026-04-23-maskmem/README.md`**
+
+```markdown
+# Maskmem Instrumentation — visualization
+
+After running benchmark with `--log_metrics --log_state_size`, render
+verification charts:
+
+\`\`\`bash
+python3 reports/2026-04-23-maskmem/plot_maskmem.py \\
+    --csv metrics/<exp>/<tag>/mouse-9.csv \\
+    --csv metrics/<exp>/<tag>/electricfan-20.csv
+\`\`\`
+
+Outputs `figures/{01_n_non_cond, 02_bytes_vs_vram, 03_components}.png`.
+
+Spec: `docs/superpowers/specs/2026-04-23-maskmem-instrumentation-design.md`
+```
+
+- [ ] **Step 3: Smoke-test with synthetic CSV (no GPU needed)**
+
+```bash
+python3 -c "
+import pandas as pd, numpy as np, pathlib
+n = 500
+df = pd.DataFrame({
+    'frame_idx': range(n),
+    'wall_time_s': np.linspace(0, 50, n),
+    'dt_ms': [float('nan')] + [100.0] * (n - 1),
+    'iter_per_sec': [float('nan')] + [10.0] * (n - 1),
+    'ram_mb': [10000 + i * 0.1 for i in range(n)],
+    'vram_alloc_mb': [500 + i * 0.78 for i in range(n)],
+    'vram_peak_mb': [2600] * n,
+    'n_non_cond': list(range(n)),
+    'maskmem_bytes': [i * 524288 for i in range(n)],
+    'pred_masks_bytes': [i * 262144 for i in range(n)],
+    'total_state_bytes': [i * 786432 for i in range(n)],
+})
+out = pathlib.Path('/tmp/synthetic.csv')
+df.to_csv(out, index=False)
+print(out)
+"
+python3 reports/2026-04-23-maskmem/plot_maskmem.py --csv /tmp/synthetic.csv
+ls reports/2026-04-23-maskmem/figures/
+```
+
+Expected: 3 PNG files generated, no errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add reports/2026-04-23-maskmem/
+git commit -m "feat(viz): plot_maskmem.py — visualize state size growth
+
+Three charts from instrumented CSV:
+1. n_non_cond vs frame_idx (must be y=x to confirm 1 entry/frame)
+2. total_state_bytes vs VRAM_alloc (must overlap to explain growth)
+3. Stacked components (maskmem vs pred_masks breakdown)
+
+Skips CSVs without instrumented cols. Smoke-tested with synthetic data."
+```
+
+---
+
+### Task 5: Final verification
 
 - [ ] **Step 1: Run all tests**
 
@@ -522,13 +732,13 @@ print(open(csv_path).read())
 Expected output: 3 lines (header + 2 rows). Row 0 has empty cells for the
 4 new columns; row 1 has `1,150,25,175` at the end.
 
-- [ ] **Step 3: Confirm git log shows 3 clean commits**
+- [ ] **Step 3: Confirm git log shows 5 clean commits**
 
 ```bash
 git log --oneline bench/preload-vs-prefetch..HEAD
 ```
 
-Expected: 4 commits (the spec doc + 3 task commits).
+Expected: 6 commits (spec doc + plan doc + 4 task commits = predictor, logger, CLI, viz).
 
 - [ ] **Step 4: Final commit (no-op if clean)**
 

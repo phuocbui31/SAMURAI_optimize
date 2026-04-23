@@ -199,7 +199,19 @@ verify, không tự động.
 - Sửa `release_old_frames` anchor logic.
 - Implement smart eviction (top-K frames, hybrid CPU/GPU offload).
 - Instrument `samurai/` baseline.
-- Plot helper cho 4 cột mới (sẽ thêm sau khi có data).
+
+### In-scope addition: visualization
+
+Sau khi user chạy benchmark có CSV với 4 cột mới, cần script vẽ ngay
+để verify hypothesis trực quan. Thêm:
+
+- `reports/2026-04-23-maskmem/plot_maskmem.py` — đọc CSV instrumented,
+  render 3 biểu đồ:
+  1. **`n_non_cond` vs `frame_idx`** — confirm tăng tuyến tính 1:1 (slope=1).
+  2. **`total_state_bytes` vs `frame_idx`** — đo slope MB/frame, so với VRAM_alloc_mb overlay.
+  3. **Stacked area** maskmem_features vs maskmem_pos_enc vs pred_masks
+     — xem component nào chiếm bytes lớn nhất.
+- Output `figures/{n_non_cond,total_state_bytes,components}.png`.
 
 ## 12. Acceptance checklist
 
