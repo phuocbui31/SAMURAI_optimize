@@ -135,3 +135,28 @@ for node in ast.walk(samurai_tree):
 assert found_samurai_method, (
     "samurai SAM2VideoPredictor must define get_state_size_stats"
 )
+
+
+# -------- samurai/ MetricsLogger: mirror extended schema --------
+samurai_logger_path = pathlib.Path("samurai/scripts/metrics_logger.py")
+samurai_logger_src = samurai_logger_path.read_text()
+
+assert "n_non_cond" in samurai_logger_src
+assert "maskmem_bytes" in samurai_logger_src
+assert "pred_masks_bytes" in samurai_logger_src
+assert "total_state_bytes" in samurai_logger_src
+
+samurai_logger_tree = ast.parse(samurai_logger_src)
+found_samurai_log = False
+for node in ast.walk(samurai_logger_tree):
+    if isinstance(node, ast.ClassDef) and node.name == "MetricsLogger":
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "log":
+                arg_names = [a.arg for a in item.args.args] + [
+                    a.arg for a in item.args.kwonlyargs
+                ]
+                assert "state_stats" in arg_names
+                found_samurai_log = True
+                break
+        break
+assert found_samurai_log, "samurai MetricsLogger.log not found"
