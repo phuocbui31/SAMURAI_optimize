@@ -19,13 +19,16 @@
 | File | Status | Responsibility |
 |---|---|---|
 | `sam2/sam2/sam2_video_predictor.py` | modify | Add `get_state_size_stats()` method (Task 1) |
-| `scripts/metrics_logger.py` | modify | Extend `HEADER` and `log()` to accept `state_stats` (Task 2) |
-| `scripts/main_inference.py` | modify | Add `--log_state_size` flag, wire into propagate loop (Task 3) |
-| `tests/test_state_size_stats.py` | create | AST smoke tests covering all 3 above (Tasks 1, 2, 3) |
+| `scripts/metrics_logger.py` | modify | Extend `HEADER` and `log()` (Task 2) |
+| `scripts/main_inference.py` | modify | Add `--log_state_size` flag (Task 3) |
+| `tests/test_state_size_stats.py` | create | AST smoke tests covering all tasks |
 | `reports/2026-04-23-maskmem/plot_maskmem.py` | create | 3 verification charts from instrumented CSV (Task 4) |
 | `reports/2026-04-23-maskmem/README.md` | create | Usage note for visualization (Task 4) |
+| `samurai/sam2/sam2/sam2_video_predictor.py` | modify | Mirror `get_state_size_stats()` to baseline (Task 5) |
+| `samurai/scripts/metrics_logger.py` | modify | Mirror logger extension (Task 6) |
+| `samurai/scripts/main_inference.py` | modify | Mirror `--log_state_size` flag (Task 7) |
 
-Each task is fully independent in source location but integration test (Task 5) runs the whole AST suite.
+Each task is fully independent in source location but integration test (Task 8) runs the whole AST suite.
 
 ---
 
@@ -697,7 +700,380 @@ Skips CSVs without instrumented cols. Smoke-tested with synthetic data."
 
 ---
 
-### Task 5: Final verification
+### Task 5: Mirror predictor method to `samurai/` baseline
+
+**Files:**
+- Modify: `tests/test_state_size_stats.py` (append `samurai/` predictor assertions)
+- Modify: `samurai/sam2/sam2/sam2_video_predictor.py` (add same `get_state_size_stats` method)
+
+**Goal:** mirror Task 1 into the `samurai/` original fork to instrument the baseline (keeps maskmem on CPU RAM via `offload_state_to_cpu=True`).
+
+- [ ] **Step 1: Append failing test for samurai predictor**
+
+Add at end of `tests/test_state_size_stats.py`:
+
+```python
+
+
+# -------- samurai/ baseline predictor: same get_state_size_stats method --------
+samurai_predictor_path = pathlib.Path(
+    "samurai/sam2/sam2/sam2_video_predictor.py"
+)
+samurai_predictor_src = samurai_predictor_path.read_text()
+samurai_tree = ast.parse(samurai_predictor_src)
+
+found_samurai_method = False
+for node in ast.walk(samurai_tree):
+    if isinstance(node, ast.ClassDef) and node.name == "SAM2VideoPredictor":
+        for item in node.body:
+            if (
+                isinstance(item, ast.FunctionDef)
+                and item.name == "get_state_size_stats"
+            ):
+                found_samurai_method = True
+                arg_names = [a.arg for a in item.args.args]
+                assert "inference_state" in arg_names
+                src = ast.get_source_segment(samurai_predictor_src, item)
+                assert "cond_frame_outputs" in src
+                assert "non_cond_frame_outputs" in src
+                assert "maskmem_features" in src
+                assert "maskmem_pos_enc" in src
+                assert "pred_masks" in src
+                assert "element_size" in src and "numel" in src
+                break
+        break
+assert found_samurai_method, (
+    "samurai SAM2VideoPredictor must define get_state_size_stats"
+)
+```
+
+- [ ] **Step 2: Run test → expect failure**
+
+```bash
+python3 tests/test_state_size_stats.py
+```
+Expected: `AssertionError: samurai SAM2VideoPredictor must define get_state_size_stats`
+
+- [ ] **Step 3: Add the method to samurai predictor**
+
+The samurai baseline does NOT have `release_old_frames`. Place method
+near other state methods; find insertion point with:
+
+```bash
+grep -n "def propagate_in_video\|def init_state\|def reset_state" samurai/sam2/sam2/sam2_video_predictor.py | head
+```
+
+Insert verbatim the same body as Task 1 (identical method):
+
+```python
+    def get_state_size_stats(self, inference_state) -> dict:
+        """Return memory accounting of inference_state output_dict.
+
+        Walks output_dict (cond + non_cond) and output_dict_per_obj. Sums
+        bytes of maskmem_features, maskmem_pos_enc, and pred_masks tensors.
+
+        Returns dict with keys:
+        - n_cond, n_non_cond
+        - maskmem_features_bytes, maskmem_pos_enc_bytes, pred_masks_bytes
+        - total_bytes
+        """
+        output_dict = inference_state.get("output_dict", {})
+        cond_outputs = output_dict.get("cond_frame_outputs", {})
+        non_cond_outputs = output_dict.get("non_cond_frame_outputs", {})
+        per_obj = inference_state.get("output_dict_per_obj", {})
+
+        feat_bytes = 0
+        pos_bytes = 0
+        mask_bytes = 0
+
+        def _tensor_bytes(t):
+            try:
+                return t.element_size() * t.numel()
+            except (AttributeError, RuntimeError):
+                return 0
+
+        def _walk_entries(entries):
+            nonlocal feat_bytes, pos_bytes, mask_bytes
+            for entry in entries.values():
+                if entry is None:
+                    continue
+                feat = entry.get("maskmem_features")
+                if feat is not None:
+                    feat_bytes += _tensor_bytes(feat)
+                pos = entry.get("maskmem_pos_enc")
+                if pos is not None:
+                    if isinstance(pos, (list, tuple)):
+                        for p in pos:
+                            pos_bytes += _tensor_bytes(p)
+                    else:
+                        pos_bytes += _tensor_bytes(pos)
+                pm = entry.get("pred_masks")
+                if pm is not None:
+                    mask_bytes += _tensor_bytes(pm)
+
+        _walk_entries(cond_outputs)
+        _walk_entries(non_cond_outputs)
+        for obj_dict in per_obj.values():
+            _walk_entries(obj_dict.get("cond_frame_outputs", {}))
+            _walk_entries(obj_dict.get("non_cond_frame_outputs", {}))
+
+        return {
+            "n_cond": len(cond_outputs),
+            "n_non_cond": len(non_cond_outputs),
+            "maskmem_features_bytes": feat_bytes,
+            "maskmem_pos_enc_bytes": pos_bytes,
+            "pred_masks_bytes": mask_bytes,
+            "total_bytes": feat_bytes + pos_bytes + mask_bytes,
+        }
+```
+
+- [ ] **Step 4: Run tests**
+
+```bash
+python3 tests/test_state_size_stats.py && bash tests/run_all_tests.sh
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_state_size_stats.py samurai/sam2/sam2/sam2_video_predictor.py
+git commit -m "feat(samurai): mirror get_state_size_stats to baseline predictor
+
+Same method body as commit 6a3372d on optimized predictor. Used to
+verify RAM-side maskmem accumulation in baseline (which uses
+offload_state_to_cpu=True so maskmem lives on CPU)."
+```
+
+---
+
+### Task 6: Mirror MetricsLogger extension to `samurai/scripts/`
+
+**Files:**
+- Modify: `tests/test_state_size_stats.py` (append samurai logger assertions)
+- Modify: `samurai/scripts/metrics_logger.py`
+
+- [ ] **Step 1: Append failing test**
+
+```python
+
+
+# -------- samurai/ MetricsLogger: mirror extended schema --------
+samurai_logger_path = pathlib.Path("samurai/scripts/metrics_logger.py")
+samurai_logger_src = samurai_logger_path.read_text()
+
+assert "n_non_cond" in samurai_logger_src
+assert "maskmem_bytes" in samurai_logger_src
+assert "pred_masks_bytes" in samurai_logger_src
+assert "total_state_bytes" in samurai_logger_src
+
+samurai_logger_tree = ast.parse(samurai_logger_src)
+found_samurai_log = False
+for node in ast.walk(samurai_logger_tree):
+    if isinstance(node, ast.ClassDef) and node.name == "MetricsLogger":
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "log":
+                arg_names = [a.arg for a in item.args.args] + [
+                    a.arg for a in item.args.kwonlyargs
+                ]
+                assert "state_stats" in arg_names
+                found_samurai_log = True
+                break
+        break
+assert found_samurai_log, "samurai MetricsLogger.log not found"
+```
+
+- [ ] **Step 2: Run test → expect failure**
+
+- [ ] **Step 3: Apply same edit as optimized**
+
+Compare first: `diff scripts/metrics_logger.py samurai/scripts/metrics_logger.py`
+
+Apply these minimal changes to `samurai/scripts/metrics_logger.py`:
+
+1. **Extend HEADER** (replace old HEADER with new string containing 4 extra cols):
+
+```python
+    HEADER = (
+        "frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,vram_peak_mb,"
+        "n_non_cond,maskmem_bytes,pred_masks_bytes,total_state_bytes\n"
+    )
+```
+
+2. **Change `log()` signature and body** to mirror the post-fix version
+   in `scripts/metrics_logger.py`. The full replacement body:
+
+```python
+    def log(self, frame_idx: int, state_stats: Optional[dict] = None) -> None:
+        """Append one CSV row.
+
+        Args:
+            frame_idx: current frame index.
+            state_stats: optional dict from
+                SAM2VideoPredictor.get_state_size_stats(). When provided, the
+                4 new columns (n_non_cond, maskmem_bytes, pred_masks_bytes,
+                total_state_bytes) are populated; otherwise written as empty
+                cells (NOT nan — empty distinguishes "not measured" from
+                "measured but unavailable"). Must be the COMPLETE dict returned
+                by get_state_size_stats(); partial dicts raise KeyError.
+        """
+        if self._fp is None:
+            return
+        now = time.perf_counter()
+        wall_time_s = now - self._start_time
+        if self._prev_time is None:
+            dt_ms = math.nan
+            iter_per_sec = math.nan
+        else:
+            dt = now - self._prev_time
+            dt_ms = dt * 1000.0
+            iter_per_sec = 1.0 / dt if dt > 0 else math.nan
+        self._prev_time = now
+
+        ram_mb = self._proc.memory_info().rss / 1e6
+        if self._cuda_available:
+            vram_alloc_mb = torch.cuda.memory_allocated(self.device) / 1e6
+            vram_peak_mb = torch.cuda.max_memory_allocated(self.device) / 1e6
+        else:
+            vram_alloc_mb = 0.0
+            vram_peak_mb = 0.0
+
+        if state_stats is None:
+            n_non_cond = ""
+            maskmem_bytes = ""
+            pred_masks_bytes = ""
+            total_state_bytes = ""
+        else:
+            n_non_cond = state_stats["n_non_cond"]
+            maskmem_bytes = (
+                state_stats["maskmem_features_bytes"]
+                + state_stats["maskmem_pos_enc_bytes"]
+            )
+            pred_masks_bytes = state_stats["pred_masks_bytes"]
+            total_state_bytes = state_stats["total_bytes"]
+
+        self._fp.write(
+            f"{frame_idx},{wall_time_s:.6f},{dt_ms},{iter_per_sec},"
+            f"{ram_mb:.3f},{vram_alloc_mb:.3f},{vram_peak_mb:.3f},"
+            f"{n_non_cond},{maskmem_bytes},{pred_masks_bytes},{total_state_bytes}\n"
+        )
+```
+
+Do NOT reformat unrelated code.
+
+- [ ] **Step 4: Run tests**
+
+```bash
+python3 tests/test_state_size_stats.py && bash tests/run_all_tests.sh
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_state_size_stats.py samurai/scripts/metrics_logger.py
+git commit -m "feat(samurai): mirror MetricsLogger state_stats support
+
+Same schema extension as scripts/metrics_logger.py (commits 14e4afa,
+1664276). Direct dict access to surface schema mismatches; backward
+compatible when state_stats omitted."
+```
+
+---
+
+### Task 7: Mirror `--log_state_size` CLI to `samurai/scripts/main_inference.py`
+
+**Files:**
+- Modify: `tests/test_state_size_stats.py`
+- Modify: `samurai/scripts/main_inference.py`
+
+- [ ] **Step 1: Append failing test**
+
+```python
+
+
+# -------- samurai/ main_inference.py: --log_state_size flag --------
+samurai_cli_path = pathlib.Path("samurai/scripts/main_inference.py")
+samurai_cli_src = samurai_cli_path.read_text()
+
+assert "--log_state_size" in samurai_cli_src
+assert "args.log_state_size" in samurai_cli_src
+assert "get_state_size_stats" in samurai_cli_src
+assert "state_stats=" in samurai_cli_src
+assert (
+    'hasattr(predictor, "get_state_size_stats")' in samurai_cli_src
+    or "hasattr(predictor, 'get_state_size_stats')" in samurai_cli_src
+), "samurai get_state_size_stats() call must be hasattr-gated"
+```
+
+- [ ] **Step 2: Run test → expect failure**
+
+- [ ] **Step 3: Apply edits**
+
+Find exact insertion points:
+```bash
+grep -n "\-\-log_metrics\|parser.parse_args\|metrics_logger.log(frame_idx)" samurai/scripts/main_inference.py
+```
+
+Apply:
+
+1. **After `--log_metrics` argparse block** (around line 48), add:
+
+```python
+parser.add_argument(
+    "--log_state_size",
+    action="store_true",
+    default=False,
+    help=(
+        "Log state size (n_non_cond + maskmem bytes) mỗi frame để debug "
+        "memory growth. Yêu cầu --log_metrics. Overhead ~µs/frame."
+    ),
+)
+```
+
+2. **After `args = parser.parse_args()`**, add defensive check:
+
+```python
+if args.log_state_size and not args.log_metrics:
+    raise ValueError(
+        "--log_state_size requires --log_metrics to be set "
+        "(state_stats columns are written by MetricsLogger)."
+    )
+```
+
+3. **Replace propagate-loop logging** (currently `metrics_logger.log(frame_idx)` at line 185):
+
+```python
+                if metrics_logger is not None:
+                    state_stats = None
+                    if args.log_state_size and hasattr(
+                        predictor, "get_state_size_stats"
+                    ):
+                        state_stats = predictor.get_state_size_stats(state)
+                    metrics_logger.log(frame_idx, state_stats=state_stats)
+```
+
+Confirm `state` is the variable name for inference_state in this file
+(samurai/scripts/main_inference.py around line 183 uses `predictor.propagate_in_video(state)` per grep — should match).
+
+- [ ] **Step 4: Run tests**
+
+```bash
+python3 tests/test_state_size_stats.py && bash tests/run_all_tests.sh
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/test_state_size_stats.py samurai/scripts/main_inference.py
+git commit -m "feat(samurai): add --log_state_size to baseline CLI
+
+Mirrors scripts/main_inference.py commit 0448526. Lets user verify
+RAM-side maskmem accumulation on the original SAMURAI fork (which
+keeps state on CPU RAM rather than GPU VRAM)."
+```
+
+---
+
+### Task 8: Final verification
 
 - [ ] **Step 1: Run all tests**
 
@@ -738,7 +1114,7 @@ Expected output: 3 lines (header + 2 rows). Row 0 has empty cells for the
 git log --oneline bench/preload-vs-prefetch..HEAD
 ```
 
-Expected: 6 commits (spec doc + plan doc + 4 task commits = predictor, logger, CLI, viz).
+Expected: 9+ commits (spec, plan, 4 optimized tasks, 3 samurai mirror tasks).
 
 - [ ] **Step 4: Final commit (no-op if clean)**
 

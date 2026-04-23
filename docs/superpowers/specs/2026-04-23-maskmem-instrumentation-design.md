@@ -20,6 +20,9 @@ fix eviction (tracked separately).
 - Không thay đổi behavior mặc định của bất kỳ tool nào (instrumentation
   là opt-in qua flag CLI).
 - Không instrument `samurai/` baseline (theo quyết định brainstorming).
+  → **Updated 2026-04-23**: scope expanded to instrument `samurai/`
+  baseline as well, since RAM-side accumulation (offload_state_to_cpu=True)
+  is the original question. See sections 11/12.
 - Không chạy benchmark — chỉ tạo tooling. User sẽ chạy trên máy GPU sau.
 - Không thay đổi signature của `init_state`, `propagate_in_video`, hay
   bất kỳ public API nào hiện có.
@@ -198,20 +201,25 @@ verify, không tự động.
 
 - Sửa `release_old_frames` anchor logic.
 - Implement smart eviction (top-K frames, hybrid CPU/GPU offload).
-- Instrument `samurai/` baseline.
+
+### In-scope addition: instrument cả `samurai/` baseline
+
+**Lý do:** baseline gốc dùng `offload_state_to_cpu=True` → maskmem
+nằm trên RAM, không phải VRAM. Để verify hypothesis "RAM tăng tuyến tính
+do tích luỹ maskmem" trên baseline (vốn là câu hỏi gốc), cần mirror
+instrumentation vào `samurai/sam2/sam2/` + `samurai/scripts/`.
+
+Mirror 3 phần (Tasks 5, 6, 7 của plan):
+- `samurai/sam2/sam2/sam2_video_predictor.py`: thêm cùng method `get_state_size_stats`.
+- `samurai/scripts/metrics_logger.py`: extend giống bản optimized.
+- `samurai/scripts/main_inference.py`: thêm flag `--log_state_size`.
+
+CSV schema **giống hệt** bản optimized → `plot_maskmem.py` dùng cho cả 2.
 
 ### In-scope addition: visualization
 
-Sau khi user chạy benchmark có CSV với 4 cột mới, cần script vẽ ngay
-để verify hypothesis trực quan. Thêm:
-
-- `reports/2026-04-23-maskmem/plot_maskmem.py` — đọc CSV instrumented,
-  render 3 biểu đồ:
-  1. **`n_non_cond` vs `frame_idx`** — confirm tăng tuyến tính 1:1 (slope=1).
-  2. **`total_state_bytes` vs `frame_idx`** — đo slope MB/frame, so với VRAM_alloc_mb overlay.
-  3. **Stacked area** maskmem_features vs maskmem_pos_enc vs pred_masks
-     — xem component nào chiếm bytes lớn nhất.
-- Output `figures/{n_non_cond,total_state_bytes,components}.png`.
+`reports/2026-04-23-maskmem/plot_maskmem.py` — đọc CSV instrumented,
+render 3 biểu đồ. Hoạt động cho CSV từ cả 2 fork (optimized + samurai).
 
 ## 12. Acceptance checklist
 
