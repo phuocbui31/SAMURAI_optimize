@@ -591,6 +591,74 @@ class SAM2VideoPredictor(SAM2Base):
         )
         return current_out["obj_ptr"]
 
+    def get_state_size_stats(self, inference_state) -> dict:
+        """Return memory accounting of inference_state output_dict.
+
+        Walks output_dict (cond + non_cond) and output_dict_per_obj. Sums
+        bytes of maskmem_features, maskmem_pos_enc, and pred_masks tensors.
+
+        Returns dict with keys:
+        - n_cond: số entry trong cond_frame_outputs
+        - n_non_cond: số entry trong non_cond_frame_outputs
+        - maskmem_features_bytes: tổng bytes maskmem_features (chính + per_obj)
+        - maskmem_pos_enc_bytes: tổng bytes maskmem_pos_enc
+        - pred_masks_bytes: tổng bytes pred_masks
+        - total_bytes: tổng 3 bên trên
+
+        Cost: O(N) per call where N = số entries. Per-obj entries share
+        underlying tensor storage with main entries (sliced view) — bytes
+        are double-counted on purpose; analysis script can divide by
+        (1 + n_obj) if needed.
+        """
+        output_dict = inference_state.get("output_dict", {})
+        cond_outputs = output_dict.get("cond_frame_outputs", {})
+        non_cond_outputs = output_dict.get("non_cond_frame_outputs", {})
+        per_obj = inference_state.get("output_dict_per_obj", {})
+
+        feat_bytes = 0
+        pos_bytes = 0
+        mask_bytes = 0
+
+        def _tensor_bytes(t):
+            try:
+                return t.element_size() * t.numel()
+            except (AttributeError, RuntimeError):
+                return 0
+
+        def _walk_entries(entries):
+            nonlocal feat_bytes, pos_bytes, mask_bytes
+            for entry in entries.values():
+                if entry is None:
+                    continue
+                feat = entry.get("maskmem_features")
+                if feat is not None:
+                    feat_bytes += _tensor_bytes(feat)
+                pos = entry.get("maskmem_pos_enc")
+                if pos is not None:
+                    if isinstance(pos, (list, tuple)):
+                        for p in pos:
+                            pos_bytes += _tensor_bytes(p)
+                    else:
+                        pos_bytes += _tensor_bytes(pos)
+                pm = entry.get("pred_masks")
+                if pm is not None:
+                    mask_bytes += _tensor_bytes(pm)
+
+        _walk_entries(cond_outputs)
+        _walk_entries(non_cond_outputs)
+        for obj_dict in per_obj.values():
+            _walk_entries(obj_dict.get("cond_frame_outputs", {}))
+            _walk_entries(obj_dict.get("non_cond_frame_outputs", {}))
+
+        return {
+            "n_cond": len(cond_outputs),
+            "n_non_cond": len(non_cond_outputs),
+            "maskmem_features_bytes": feat_bytes,
+            "maskmem_pos_enc_bytes": pos_bytes,
+            "pred_masks_bytes": mask_bytes,
+            "total_bytes": feat_bytes + pos_bytes + mask_bytes,
+        }
+
     def release_old_frames(
         self,
         inference_state,
