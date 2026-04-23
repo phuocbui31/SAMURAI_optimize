@@ -20,6 +20,10 @@ EXPECTED_HEADER = [
     "ram_mb",
     "vram_alloc_mb",
     "vram_peak_mb",
+    "n_non_cond",
+    "maskmem_bytes",
+    "pred_masks_bytes",
+    "total_state_bytes",
 ]
 
 

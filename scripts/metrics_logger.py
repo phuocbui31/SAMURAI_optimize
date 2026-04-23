@@ -33,7 +33,8 @@ class MetricsLogger:
     """Append 1 CSV row per frame. Line-buffered for crash safety."""
 
     HEADER = (
-        "frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,vram_peak_mb\n"
+        "frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,vram_peak_mb,"
+        "n_non_cond,maskmem_bytes,pred_masks_bytes,total_state_bytes\n"
     )
 
     def __init__(self, csv_path: str, device: str = "cuda:0") -> None:
@@ -54,7 +55,18 @@ class MetricsLogger:
         self._start_time = time.perf_counter()
         self._prev_time: Optional[float] = None
 
-    def log(self, frame_idx: int) -> None:
+    def log(self, frame_idx: int, state_stats: Optional[dict] = None) -> None:
+        """Append one CSV row.
+
+        Args:
+            frame_idx: current frame index.
+            state_stats: optional dict from
+                SAM2VideoPredictor.get_state_size_stats(). When provided, the
+                4 new columns (n_non_cond, maskmem_bytes, pred_masks_bytes,
+                total_state_bytes) are populated; otherwise written as empty
+                cells (NOT nan — empty distinguishes "not measured" from
+                "measured but unavailable").
+        """
         if self._fp is None:
             return
         now = time.perf_counter()
@@ -76,9 +88,23 @@ class MetricsLogger:
             vram_alloc_mb = 0.0
             vram_peak_mb = 0.0
 
+        if state_stats is None:
+            n_non_cond = ""
+            maskmem_bytes = ""
+            pred_masks_bytes = ""
+            total_state_bytes = ""
+        else:
+            n_non_cond = state_stats.get("n_non_cond", "")
+            mf = state_stats.get("maskmem_features_bytes", 0)
+            mp = state_stats.get("maskmem_pos_enc_bytes", 0)
+            maskmem_bytes = mf + mp
+            pred_masks_bytes = state_stats.get("pred_masks_bytes", 0)
+            total_state_bytes = state_stats.get("total_bytes", 0)
+
         self._fp.write(
             f"{frame_idx},{wall_time_s:.6f},{dt_ms},{iter_per_sec},"
-            f"{ram_mb:.3f},{vram_alloc_mb:.3f},{vram_peak_mb:.3f}\n"
+            f"{ram_mb:.3f},{vram_alloc_mb:.3f},{vram_peak_mb:.3f},"
+            f"{n_non_cond},{maskmem_bytes},{pred_masks_bytes},{total_state_bytes}\n"
         )
 
     def close(self) -> None:

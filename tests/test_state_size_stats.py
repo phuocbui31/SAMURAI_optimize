@@ -49,3 +49,36 @@ for node in ast.walk(tree):
         break
 
 assert found_method, "SAM2VideoPredictor must define method get_state_size_stats"
+
+
+# -------- MetricsLogger: extended schema + state_stats param --------
+logger_path = pathlib.Path("scripts/metrics_logger.py")
+logger_src = logger_path.read_text()
+logger_tree = ast.parse(logger_src)
+
+# HEADER must include 4 new columns
+assert "n_non_cond" in logger_src, "HEADER must contain 'n_non_cond' column"
+assert "maskmem_bytes" in logger_src, "HEADER must contain 'maskmem_bytes' column"
+assert "pred_masks_bytes" in logger_src, "HEADER must contain 'pred_masks_bytes' column"
+assert "total_state_bytes" in logger_src, (
+    "HEADER must contain 'total_state_bytes' column"
+)
+
+# log() must accept state_stats keyword arg with default None
+found_log = False
+for node in ast.walk(logger_tree):
+    if isinstance(node, ast.ClassDef) and node.name == "MetricsLogger":
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "log":
+                arg_names = [a.arg for a in item.args.args] + [
+                    a.arg for a in item.args.kwonlyargs
+                ]
+                assert "state_stats" in arg_names, (
+                    "MetricsLogger.log must accept state_stats parameter"
+                )
+                src = ast.get_source_segment(logger_src, item)
+                assert "state_stats" in src
+                found_log = True
+                break
+        break
+assert found_log, "MetricsLogger.log not found"
