@@ -809,18 +809,24 @@ class SAM2VideoPredictor(SAM2Base):
                 continue
             stats["candidates_with_scores"] += 1
             try:
-                # Batch GPU->CPU sync: gom 3 scalar thành 1 transfer để cắt
-                # 2 implicit cuda.synchronize() per iteration. iou/obj đã được
-                # guard không None ở phía trên; kf có thể None → branch riêng.
+                iou_s = torch.as_tensor(iou).reshape(-1)[0]
+                obj_s = torch.as_tensor(obj).reshape(-1)[0]
                 if kf is not None:
+                    kf_s = torch.as_tensor(kf).reshape(-1)[0]
                     iou_val, obj_val, kf_val = (
-                        torch.stack([iou, obj, kf]).cpu().tolist()
+                        torch.stack([iou_s, obj_s, kf_s]).cpu().tolist()
                     )
                 else:
-                    iou_val, obj_val = torch.stack([iou, obj]).cpu().tolist()
+                    iou_val, obj_val = torch.stack([iou_s, obj_s]).cpu().tolist()
                     kf_val = None
             except (AttributeError, RuntimeError):
                 continue
+            # TEMP DEBUG: collect scores for all candidates
+            if "_debug_scores" not in stats:
+                stats["_debug_scores"] = []
+            stats["_debug_scores"].append(
+                {"frame": i, "iou": iou_val, "obj": obj_val, "kf": kf_val}
+            )
             if (
                 iou_val > self.memory_bank_iou_threshold
                 and obj_val > self.memory_bank_obj_score_threshold
@@ -1119,6 +1125,19 @@ class SAM2VideoPredictor(SAM2Base):
                     }
                     tqdm.write(promote_debug_logger.format_terminal_line(row))
                     promote_debug_logger.log(row)
+                    # TEMP DEBUG: dump candidate scores when no_candidate
+                    _dbg = promote_stats.get("_debug_scores", [])
+                    if promote_stats["action"] == "no_candidate" and _dbg:
+                        ious = [s["iou"] for s in _dbg]
+                        objs = [s["obj"] for s in _dbg]
+                        kfs = [s["kf"] for s in _dbg if s["kf"] is not None]
+                        tqdm.write(
+                            f"  [ScoreDbg] n={len(_dbg)} "
+                            f"iou=[{min(ious):.4f}, {max(ious):.4f}] "
+                            f"obj=[{min(objs):.4f}, {max(objs):.4f}] "
+                            f"kf={'['+f'{min(kfs):.4f}, {max(kfs):.4f}'+']' if kfs else 'None'} "
+                            f"thresh: iou>{self.memory_bank_iou_threshold} obj>{self.memory_bank_obj_score_threshold}"
+                        )
             yield frame_idx, obj_ids, video_res_masks
 
     def _add_output_per_object(

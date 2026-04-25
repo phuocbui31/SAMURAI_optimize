@@ -407,6 +407,83 @@ AST smoke tests:
 
 Spec & plan: `docs/superpowers/specs/2026-04-20-metrics-logging-design.md`, `docs/superpowers/plans/2026-04-20-metrics-logging-plan.md`.
 
+### Auto-Promote Debug Diagnostics (`scripts/promote_debug_logger.py`, `scripts/plot_promote_debug.py`)
+
+Opt-in runtime diagnostics cho cơ chế auto-promote, giúp trả lời: "auto-promote có chạy đúng không" và "vì sao VRAM vẫn tăng tuyến tính". Bật bằng `--log_promote_debug` (yêu cầu `--optimized --log_metrics`).
+
+**Bật log:**
+
+```bash
+# Case A: auto-promote ON (default)
+python scripts/main_inference.py --optimized --log_metrics --log_promote_debug \
+    --run_tag promote_dbg_on
+
+# Case B: auto-promote OFF (tất cả row có action=disabled)
+python scripts/main_inference.py --optimized --no_auto_promote --log_metrics \
+    --log_promote_debug --run_tag promote_dbg_off
+```
+
+**3 output song song khi bật:**
+
+1. **Terminal compact** — 1 dòng/maintenance tick qua `tqdm.write()`:
+   ```
+   [PromoteDbg] f=540 act=throttled cand=- cond=0|1 newest=0 old_mask=-1000 noncond_maskmem=541
+   ```
+   Fields: `f`=frame_idx, `act`=action (`disabled|throttled|no_candidate|promoted`), `cand`=candidate_idx hoặc `-`, `cond`=n_auto_promoted|n_total, `newest`=newest_cond_after, `old_mask`=oldest_allowed_maskmem_after, `noncond_maskmem`=n_non_cond_with_maskmem.
+
+2. **CSV riêng** — 1 file/video tại `metrics_dir/run_tag/<video>_promote_debug.csv`, 27 cột, line-buffered.
+
+3. **3 PNG charts** — chạy post-run:
+   ```bash
+   # Một video
+   python scripts/plot_promote_debug.py \
+       --csv metrics/.../run_tag/<video>_promote_debug.csv
+
+   # Glob nhiều video
+   python scripts/plot_promote_debug.py \
+       --csv "metrics/samurai_base_plus/promote_dbg_on/*_promote_debug.csv" \
+       [--out_dir plots/custom/]
+   ```
+   Output mặc định: `plots/<timestamp>/promote_debug/<video>/`
+
+**3 biểu đồ:**
+
+| Chart | File | Ý nghĩa |
+|-------|------|---------|
+| Cond-frame anchor timeline | `01_cond_anchor.png` | `newest_cond` + `oldest_allowed_maskmem` theo thời gian. Scatter xanh lá tại tick promoted. Nếu `newest_cond` đứng yên ở 0 → auto-promote không fire → eviction không trượt. |
+| Non-cond maskmem accumulation | `02_maskmem_accumulation.png` | `n_non_cond_with_maskmem` vs `n_non_cond_total`. Hai đường gần nhau = không evict maskmem. Phẳng = eviction hoạt động. |
+| Promote funnel per tick | `03_promote_funnel.png` | Bar chart: `candidates_seen` → `with_maskmem` → `with_scores` → `pass_threshold`. Thấy rõ funnel drop-off ở bước nào. |
+
+**CSV schema (27 cột):**
+
+| Nhóm | Cột |
+|------|-----|
+| Config (lặp mỗi row) | `frame_idx`, `release_interval`, `enable_auto_promote`, `promote_interval`, `promote_search_window`, `keep_window_maskmem`, `keep_window_pred_masks` |
+| Cond state BEFORE | `cond_keys_before` (JSON array), `nearest_cond_excl_zero_before` |
+| Cond state AFTER | `cond_keys_after` (JSON array), `newest_cond_after` |
+| Action | `auto_promote_attempted`, `action`, `candidate_idx`, `search_start`, `search_end` |
+| Funnel stats | `candidates_seen`, `candidates_with_maskmem`, `candidates_with_scores`, `candidates_pass_threshold` |
+| Eviction anchor | `oldest_allowed_maskmem_after`, `oldest_allowed_pred_masks_after` |
+| Summary | `n_non_cond_total`, `n_non_cond_with_maskmem`, `n_non_cond_with_pred_masks`, `n_cond_total`, `n_auto_promoted_cond` |
+
+**Cách đọc kết quả — checklist câu hỏi:**
+
+1. Tick nào `throttled` vs đã qua throttle? → Cột `action`.
+2. Khi qua throttle, funnel drop ở bước nào? → `candidates_seen` → `with_maskmem` → `with_scores` → `pass_threshold`.
+3. Có tick nào `promoted`? → Cột `action` + chart 1 scatter markers.
+4. `newest_cond_after` có tiến khi promoted? → Chart 1 line.
+5. `oldest_allowed_maskmem_after` có tiến theo? → Chart 1 dashed line.
+6. `n_non_cond_with_maskmem` bounded hay tăng tuyến tính? → Chart 2.
+
+**Overhead:** ~vài µs/tick (chỉ chạy tại maintenance tick, tức 1 lần mỗi `release_interval` frames). Không có overhead khi không bật flag.
+
+AST smoke tests:
+- `tests/test_promote_debug_logger.py` — runtime test (2 row log → 3 row CSV, idempotent close) + AST class signature (`__init__`, `log`, `close`, `format_terminal_line`).
+- `tests/test_promote_debug_cli.py` — verify `--log_promote_debug` flag + guards (`--optimized`, `--log_metrics`) + tokens `PromoteDebugLogger`/`.close()`.
+- `tests/test_plot_promote_debug_cli.py` — verify CLI flags (`--csv`, `--out_dir`) + functions (`main`, `load_debug_csv`, `plot_cond_anchor`, `plot_maskmem_accumulation`, `plot_promote_funnel`) + `matplotlib.use("Agg")` ordering.
+
+Spec & plan: `docs/superpowers/specs/2026-04-25-auto-promote-cond-debug-design.md`, `docs/superpowers/plans/2026-04-25-auto-promote-debug-visualize.md`.
+
 ## FAQ & Troubleshooting
 
 **Q: Do I need to train SAMURAI?**
