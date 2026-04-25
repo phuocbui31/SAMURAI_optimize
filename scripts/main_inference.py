@@ -149,12 +149,31 @@ parser.add_argument(
     default="default",
     help="Subdir dưới metrics_dir để phân biệt baseline/optimized run.",
 )
+parser.add_argument(
+    "--log_promote_debug",
+    action="store_true",
+    default=False,
+    help=(
+        "Log auto-promote diagnostics per maintenance tick: compact terminal "
+        "line + separate CSV. Requires --optimized --log_metrics."
+    ),
+)
 args = parser.parse_args()
 
 if args.log_state_size and not args.log_metrics:
     raise ValueError(
         "--log_state_size requires --log_metrics to be set "
         "(state_stats columns are written by MetricsLogger)."
+    )
+if args.log_promote_debug and not args.optimized:
+    raise ValueError(
+        "--log_promote_debug requires --optimized "
+        "(non-optimized path does not use maintenance promote/release)."
+    )
+if args.log_promote_debug and not args.log_metrics:
+    raise ValueError(
+        "--log_promote_debug requires --log_metrics "
+        "(reuses metrics_dir/run_tag for CSV output path)."
     )
 
 if args.evaluate:
@@ -170,6 +189,8 @@ if args.evaluate:
 
 if args.log_metrics:
     from metrics_logger import MetricsLogger
+if args.log_promote_debug:
+    from promote_debug_logger import PromoteDebugLogger
 
 color = [
     (255, 0, 0),
@@ -241,6 +262,14 @@ try:
         else:
             metrics_logger = None
 
+        if args.log_promote_debug:
+            promote_debug_csv = osp.join(
+                metrics_dir, args.run_tag, f"{video_basename}_promote_debug.csv"
+            )
+            promote_debug_logger = PromoteDebugLogger(promote_debug_csv)
+        else:
+            promote_debug_logger = None
+
         if save_to_video:
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             out = cv2.VideoWriter(
@@ -299,6 +328,8 @@ try:
                 propagate_kwargs["max_auto_promoted_cond_frames"] = (
                     args.max_auto_promoted_cond_frames
                 )
+            if args.log_promote_debug:
+                propagate_kwargs["promote_debug_logger"] = promote_debug_logger
 
             # Reset prefetch hit/miss counters right before propagate so per-video
             # stats measure ONLY the tracking phase (excludes init_state bootstrap
@@ -372,6 +403,8 @@ try:
 
         if metrics_logger is not None:
             metrics_logger.close()
+        if promote_debug_logger is not None:
+            promote_debug_logger.close()
 
         # Log prefetch cache stats (only meaningful for AsyncVideoFrameLoader,
         # i.e. when --preload_frames is OFF). High miss_rate ⇒ prefetcher fell
