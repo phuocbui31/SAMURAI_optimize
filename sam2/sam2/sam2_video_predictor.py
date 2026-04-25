@@ -762,30 +762,52 @@ class SAM2VideoPredictor(SAM2Base):
 
         Throttle + threshold-based selection, streaming-friendly (bounded memory
         without needing total num_frames upfront).
+
+        Returns a dict with funnel stats for diagnostics (action, candidate_idx,
+        search range, per-step counts). Always returns a dict even on early exit.
         """
         cond_outputs = inference_state["output_dict"]["cond_frame_outputs"]
         non_cond = inference_state["output_dict"]["non_cond_frame_outputs"]
+
+        stats = {
+            "action": "disabled",
+            "candidate_idx": "",
+            "search_start": "",
+            "search_end": "",
+            "candidates_seen": 0,
+            "candidates_with_maskmem": 0,
+            "candidates_with_scores": 0,
+            "candidates_pass_threshold": 0,
+        }
 
         # 1. Throttle: skip if recent cond is closer than promote_interval
         cond_keys_excluding_zero = [k for k in cond_outputs.keys() if k != 0]
         nearest_cond = max(cond_keys_excluding_zero) if cond_keys_excluding_zero else 0
         if frame_idx - nearest_cond < promote_interval:
-            return
+            stats["action"] = "throttled"
+            return stats
 
         # 2. Search for the nearest quality candidate (backward within window)
         candidate_idx = None
         search_start = max(1, frame_idx - promote_search_window)
-        for i in range(frame_idx - 2, search_start - 1, -1):
+        search_end = frame_idx - 2
+        stats["search_start"] = search_start
+        stats["search_end"] = search_end
+
+        for i in range(search_end, search_start - 1, -1):
             if i not in non_cond:
                 continue
             entry = non_cond[i]
+            stats["candidates_seen"] += 1
             if entry.get("maskmem_features") is None:
                 continue
+            stats["candidates_with_maskmem"] += 1
             iou = entry.get("best_iou_score")
             obj = entry.get("object_score_logits")
             kf = entry.get("kf_score")
             if iou is None or obj is None:
                 continue
+            stats["candidates_with_scores"] += 1
             try:
                 # Batch GPU->CPU sync: gom 3 scalar thành 1 transfer để cắt
                 # 2 implicit cuda.synchronize() per iteration. iou/obj đã được
@@ -804,13 +826,17 @@ class SAM2VideoPredictor(SAM2Base):
                 and obj_val > self.memory_bank_obj_score_threshold
                 and (kf_val is None or kf_val > self.memory_bank_kf_score_threshold)
             ):
+                stats["candidates_pass_threshold"] += 1
                 candidate_idx = i
                 break
 
         if candidate_idx is None:
-            return
+            stats["action"] = "no_candidate"
+            return stats
 
         # 3. Promote candidate to cond
+        stats["action"] = "promoted"
+        stats["candidate_idx"] = candidate_idx
         self.append_frame_as_cond_frame(inference_state, candidate_idx)
 
         # 4. Evict oldest auto-promoted cond frame (never evict frame 0)
@@ -826,6 +852,8 @@ class SAM2VideoPredictor(SAM2Base):
                 oldest
             )
             auto_promoted.pop(0)
+
+        return stats
 
     @torch.inference_mode()
     def propagate_in_video_preflight(self, inference_state):
@@ -911,6 +939,7 @@ class SAM2VideoPredictor(SAM2Base):
         promote_interval=500,
         promote_search_window=50,
         max_auto_promoted_cond_frames=4,
+        promote_debug_logger=None,
     ):
         """Propagate the input points across frames to track in the entire video."""
         import warnings
@@ -1010,19 +1039,86 @@ class SAM2VideoPredictor(SAM2Base):
                 and frame_idx % release_interval == 0
                 and not reverse
             ):
+                cond_outputs_ref = inference_state["output_dict"]["cond_frame_outputs"]
+                non_cond_ref = inference_state["output_dict"]["non_cond_frame_outputs"]
+
+                # -- snapshot BEFORE --
+                _debug_logging = promote_debug_logger is not None
+                if _debug_logging:
+                    cond_keys_before = sorted(cond_outputs_ref.keys())
+                    cond_excl_zero = [k for k in cond_keys_before if k != 0]
+                    nearest_cond_before = max(cond_excl_zero) if cond_excl_zero else 0
+
+                # -- auto-promote --
                 if enable_auto_promote:
-                    self._maybe_promote_cond_frame(
+                    promote_stats = self._maybe_promote_cond_frame(
                         inference_state,
                         frame_idx,
                         promote_interval=promote_interval,
                         promote_search_window=promote_search_window,
                         max_auto_promoted_cond_frames=max_auto_promoted_cond_frames,
                     )
+                else:
+                    promote_stats = {
+                        "action": "disabled",
+                        "candidate_idx": "",
+                        "search_start": "",
+                        "search_end": "",
+                        "candidates_seen": 0,
+                        "candidates_with_maskmem": 0,
+                        "candidates_with_scores": 0,
+                        "candidates_pass_threshold": 0,
+                    }
+
+                # -- release --
                 self.release_old_frames(
                     inference_state,
                     keep_window_maskmem=keep_window_maskmem,
                     keep_window_pred_masks=keep_window_pred_masks,
                 )
+
+                # -- snapshot AFTER + log --
+                if _debug_logging:
+                    newest_cond = max(cond_outputs_ref.keys())
+                    oldest_maskmem = newest_cond - keep_window_maskmem
+                    oldest_pred = newest_cond - keep_window_pred_masks
+
+                    n_non_cond_total = len(non_cond_ref)
+                    n_maskmem = sum(
+                        1 for e in non_cond_ref.values()
+                        if e.get("maskmem_features") is not None
+                    )
+                    n_pred = sum(
+                        1 for e in non_cond_ref.values()
+                        if e.get("pred_masks") is not None
+                    )
+                    n_cond_total = len(cond_outputs_ref)
+                    n_auto = len([k for k in cond_outputs_ref.keys() if k != 0])
+
+                    row = {
+                        "frame_idx": frame_idx,
+                        "release_interval": release_interval,
+                        "enable_auto_promote": enable_auto_promote,
+                        "promote_interval": promote_interval,
+                        "promote_search_window": promote_search_window,
+                        "keep_window_maskmem": keep_window_maskmem,
+                        "keep_window_pred_masks": keep_window_pred_masks,
+                        "cond_keys_before": cond_keys_before,
+                        "nearest_cond_excl_zero_before": nearest_cond_before,
+                        "cond_keys_after": sorted(cond_outputs_ref.keys()),
+                        "newest_cond_after": newest_cond,
+                        "auto_promote_attempted": 1 if enable_auto_promote else 0,
+                        **promote_stats,
+                        "oldest_allowed_maskmem_after": oldest_maskmem,
+                        "oldest_allowed_pred_masks_after": oldest_pred,
+                        "n_non_cond_total": n_non_cond_total,
+                        "n_non_cond_with_maskmem": n_maskmem,
+                        "n_non_cond_with_pred_masks": n_pred,
+                        "n_cond_total": n_cond_total,
+                        "n_auto_promoted_cond": n_auto,
+                    }
+                    tqdm.write(promote_debug_logger.format_terminal_line(row))
+                    promote_debug_logger.log(row)
             yield frame_idx, obj_ids, video_res_masks
 
     def _add_output_per_object(
