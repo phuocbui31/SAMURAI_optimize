@@ -110,6 +110,22 @@ No linter is configured in this fork. Match surrounding style. If you run anythi
 - Keep `sam2/sam2/` changes minimal and isolated — this directory tracks upstream SAM 2; document any divergence in `docs/`.
 - When in doubt about memory behavior, read `docs/2026-04-17-memory-optimization-design.md` and `docs/recompute_maskmem_plan.md` first.
 
+## Known Fixes & Patches
+
+### `_maybe_promote_cond_frame` torch.stack shape mismatch (2026-04-26)
+
+**Problem:** Auto-promote never fired because `torch.stack([iou, obj, kf])` in `_maybe_promote_cond_frame` always raised `RuntimeError` (silently caught). Root cause: `object_score_logits` has shape `[1, 1]` while `best_iou_score` and `kf_score` have shape `[1]` — incompatible for `torch.stack`. Every candidate was skipped via `except (AttributeError, RuntimeError): continue`, so no score comparison ever ran. Result: `newest_cond` stuck at frame 0, eviction anchor negative, VRAM grew linearly.
+
+**Fix:** Normalize each score to scalar via `torch.as_tensor(...).reshape(-1)[0]` before stacking. File: `sam2/sam2/sam2_video_predictor.py`, method `_maybe_promote_cond_frame()`.
+
+**Impact:** Enables auto-promote + eviction pipeline to actually work. VRAM now bounded by `keep_window_maskmem`.
+
+### `select_closest_cond_frames` max=1 support (2026-04-19)
+
+**Problem:** `select_closest_cond_frames` asserted `max >= 2`, crashing when `force_include_init_cond_frame=True` caused `max - 1 = 1` once 3+ cond frames existed.
+
+**Fix:** Added `elif max_cond_frame_num == 1` branch in `sam2/sam2/modeling/sam2_utils.py`.
+
 ## Commit Hygiene
 
 - Make focused commits; do not bundle reformat-only changes with logic changes.

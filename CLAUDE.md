@@ -519,6 +519,28 @@ A: Memory bank storing encoder outputs of key frames. LRU eviction keeps it boun
 
 **Context:** `select_closest_cond_frames` is original SAM 2 code designed for bidirectional VOS (picks 1 frame before + 1 after current frame). SAMURAI uses streaming (forward-only), so `idx_after` is always `None`. The force-include feature was added by our memory optimization plan (Phase 5) but didn't update this utility function to handle `max=1`.
 
+### `_maybe_promote_cond_frame` torch.stack shape mismatch (2026-04-26)
+
+**Problem:** Auto-promote never fired — all candidates reported `candidates_with_scores=49` but `candidates_pass_threshold=0`. The root cause: `torch.stack([iou, obj, kf])` in `_maybe_promote_cond_frame` always raised `RuntimeError` because the tensors had incompatible shapes:
+- `best_iou_score` (from `entry.get("best_iou_score")`): shape `[1]` (1-D)
+- `object_score_logits` (from `entry.get("object_score_logits")`): shape `[1, 1]` (2-D)
+- `kf_score` (from `entry.get("kf_score")`): shape `[1]` (1-D)
+
+The `except (AttributeError, RuntimeError): continue` silently skipped every candidate without comparing scores. Result: `newest_cond` stayed at frame 0, eviction anchor = `0 - keep_window_maskmem` (negative), `release_old_frames` evicted nothing, VRAM grew linearly.
+
+**Fix:** Added `torch.as_tensor(...).reshape(-1)[0]` to normalize each score to a scalar before stacking:
+```python
+iou_s = torch.as_tensor(iou).reshape(-1)[0]
+obj_s = torch.as_tensor(obj).reshape(-1)[0]
+kf_s = torch.as_tensor(kf).reshape(-1)[0]  # only when kf is not None
+```
+
+**Key file:** `sam2/sam2/sam2_video_predictor.py` — `_maybe_promote_cond_frame()` method, score extraction block.
+
+**Impact:** This fix enables auto-promote to actually work. Before the fix, the entire auto-promote + eviction pipeline was silently broken. After the fix, `newest_cond` advances as frames get promoted, eviction anchor slides forward, and VRAM is bounded by `keep_window_maskmem`.
+
+**Diagnostic context:** The bug was discovered using `--log_promote_debug` diagnostics. Funnel showed all candidates passing `maskmem` and `scores` checks but zero passing threshold — because threshold comparison was never reached. Adding temporary `_debug_scores` collection (also inside the `try` block) confirmed the list was empty, pointing to the `except` clause as the culprit.
+
 ## References
 
 - **Paper**: [SAMURAI: Adapting Segment Anything Model for Zero-Shot Visual Tracking](https://arxiv.org/abs/2411.11922)
