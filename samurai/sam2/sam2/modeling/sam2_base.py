@@ -23,6 +23,16 @@ from sam2.utils.kalman_filter import KalmanFilter
 NO_OBJ_SCORE = -1024.0
 
 
+def _profile_score_to_float(score):
+    """Convert tensor-like profile scores to a scalar float without assuming shape."""
+    if score is None:
+        return None
+    try:
+        return float(torch.as_tensor(score).detach().reshape(-1)[0].cpu())
+    except (AttributeError, RuntimeError, IndexError, TypeError, ValueError):
+        return None
+
+
 class SAM2Base(torch.nn.Module):
     def __init__(
         self,
@@ -627,6 +637,7 @@ class SAM2Base(torch.nn.Module):
         output_dict,
         num_frames,
         track_in_reverse=False,  # tracking in reverse time order (for demo usage)
+        maskmem_profile_logger=None,
     ):
         """Fuse the current frame's visual feature map with previous memory."""
         B = current_vision_feats[-1].size(1)  # batch size on this frame
@@ -661,9 +672,17 @@ class SAM2Base(torch.nn.Module):
             stride = 1 if self.training else self.memory_temporal_stride_for_eval
 
             if self.samurai_mode:
+                profiling_maskmem = maskmem_profile_logger is not None
+                selected_maskmem_indices = []
+                selected_maskmem_outputs = []
+                scan_depth = 0
+                n_candidates_rejected = 0
+                scan_farthest_checked = -1
                 valid_indices = [] 
                 if frame_idx > 1:  # Ensure we have previous frames to evaluate
                     for i in range(frame_idx - 1, 1, -1):  # Iterate backwards through previous frames
+                        scan_depth += 1
+                        scan_farthest_checked = i
                         iou_score = output_dict["non_cond_frame_outputs"][i]["best_iou_score"]  # Get mask affinity score
                         obj_score = output_dict["non_cond_frame_outputs"][i]["object_score_logits"]  # Get object score
                         kf_score = output_dict["non_cond_frame_outputs"][i]["kf_score"] if "kf_score" in output_dict["non_cond_frame_outputs"][i] else None  # Get motion score if available
@@ -672,6 +691,8 @@ class SAM2Base(torch.nn.Module):
                            obj_score.item() > self.memory_bank_obj_score_threshold and \
                            (kf_score is None or kf_score.item() > self.memory_bank_kf_score_threshold):
                             valid_indices.insert(0, i)  
+                        else:
+                            n_candidates_rejected += 1
                         # Check the number of valid indices
                         if len(valid_indices) >= self.max_obj_ptrs_in_encoder - 1:  
                             break
@@ -681,10 +702,36 @@ class SAM2Base(torch.nn.Module):
                     idx = t_pos - self.num_maskmem  # Calculate the index for valid indices
                     if idx < -len(valid_indices):  # Skip if index is out of bounds
                         continue
-                    out = output_dict["non_cond_frame_outputs"].get(valid_indices[idx], None)  # Get output for the valid index
+                    selected_idx = valid_indices[idx]
+                    out = output_dict["non_cond_frame_outputs"].get(selected_idx, None)  # Get output for the valid index
                     if out is None:  # If not found, check unselected outputs
-                        out = unselected_cond_outputs.get(valid_indices[idx], None)
+                        out = unselected_cond_outputs.get(selected_idx, None)
+                    if profiling_maskmem and out is not None:
+                        selected_maskmem_indices.append(selected_idx)
+                        selected_maskmem_outputs.append(out)
                     t_pos_and_prevs.append((t_pos, out))  # Append the temporal position and output to the list
+                if profiling_maskmem and not is_init_cond_frame:
+                    maskmem_iou_scores = []
+                    maskmem_obj_scores = []
+                    maskmem_kf_scores = []
+                    for out in selected_maskmem_outputs:
+                        iou_score = _profile_score_to_float(out.get("best_iou_score"))
+                        obj_score = _profile_score_to_float(out.get("object_score_logits"))
+                        kf_score = _profile_score_to_float(out.get("kf_score"))
+                        maskmem_iou_scores.append(iou_score)
+                        maskmem_obj_scores.append(obj_score)
+                        maskmem_kf_scores.append(kf_score)
+
+                    maskmem_profile_logger.log(
+                        frame_idx=frame_idx,
+                        maskmem_frame_indices=selected_maskmem_indices,
+                        maskmem_iou_scores=maskmem_iou_scores,
+                        maskmem_obj_scores=maskmem_obj_scores,
+                        maskmem_kf_scores=maskmem_kf_scores,
+                        scan_depth=scan_depth,
+                        n_candidates_rejected=n_candidates_rejected,
+                        scan_farthest_checked=scan_farthest_checked,
+                    )
             else:
                 for t_pos in range(1, self.num_maskmem):
                     t_rel = self.num_maskmem - t_pos  # how many frames before current frame
@@ -886,6 +933,7 @@ class SAM2Base(torch.nn.Module):
         num_frames,
         track_in_reverse,
         prev_sam_mask_logits,
+        maskmem_profile_logger=None,
     ):
         current_out = {"point_inputs": point_inputs, "mask_inputs": mask_inputs}
         # High-resolution feature maps for the SAM head, reshape (HW)BC => BCHW
@@ -915,6 +963,7 @@ class SAM2Base(torch.nn.Module):
                 output_dict=output_dict,
                 num_frames=num_frames,
                 track_in_reverse=track_in_reverse,
+                maskmem_profile_logger=maskmem_profile_logger,
             )
             # apply SAM-style segmentation head
             # here we might feed previously predicted low-res SAM mask logits into the SAM mask decoder,
@@ -979,6 +1028,7 @@ class SAM2Base(torch.nn.Module):
         run_mem_encoder=True,
         # The previously predicted SAM mask logits (which can be fed together with new clicks in demo).
         prev_sam_mask_logits=None,
+        maskmem_profile_logger=None,
     ):
         current_out, sam_outputs, _, _ = self._track_step(
             frame_idx,
@@ -992,6 +1042,7 @@ class SAM2Base(torch.nn.Module):
             num_frames,
             track_in_reverse,
             prev_sam_mask_logits,
+            maskmem_profile_logger=maskmem_profile_logger,
         )
 
         (
