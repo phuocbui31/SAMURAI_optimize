@@ -189,7 +189,7 @@ if args.evaluate:
 
 if args.log_metrics:
     from metrics_logger import MetricsLogger
-if args.log_promote_debug:
+if args.log_promote_debug and args.enable_auto_promote:
     from promote_debug_logger import PromoteDebugLogger
 
 color = [
@@ -262,7 +262,7 @@ try:
         else:
             metrics_logger = None
 
-        if args.log_promote_debug:
+        if args.log_promote_debug and args.enable_auto_promote:
             promote_debug_csv = osp.join(
                 metrics_dir, args.run_tag, f"{video_basename}_promote_debug.csv"
             )
@@ -323,12 +323,13 @@ try:
                 propagate_kwargs["keep_window_maskmem"] = args.keep_window_maskmem
                 propagate_kwargs["keep_window_pred_masks"] = args.keep_window_pred_masks
                 propagate_kwargs["enable_auto_promote"] = args.enable_auto_promote
-                propagate_kwargs["promote_interval"] = args.promote_interval
-                propagate_kwargs["promote_search_window"] = args.promote_search_window
-                propagate_kwargs["max_auto_promoted_cond_frames"] = (
-                    args.max_auto_promoted_cond_frames
-                )
-            if args.log_promote_debug:
+                if args.enable_auto_promote:
+                    propagate_kwargs["promote_interval"] = args.promote_interval
+                    propagate_kwargs["promote_search_window"] = args.promote_search_window
+                    propagate_kwargs["max_auto_promoted_cond_frames"] = (
+                        args.max_auto_promoted_cond_frames
+                    )
+            if args.log_promote_debug and promote_debug_logger is not None:
                 propagate_kwargs["promote_debug_logger"] = promote_debug_logger
 
             # Reset prefetch hit/miss counters right before propagate so per-video

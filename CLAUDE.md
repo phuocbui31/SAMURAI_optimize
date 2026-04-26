@@ -133,9 +133,9 @@ python scripts/main_inference.py \
   [--optimized]                     # Enable memory optimizations (default: no)
   [--release_interval 60]           # Run release + auto-promote every N frames (default: 60)
   [--max_cache_frames 10]           # LRU cap for images in RAM (default: 10)
-  [--keep_window_maskmem 1000]      # Max cached maskmem frames in VRAM (default: 1000)
+  [--keep_window_maskmem 1000]      # Eviction window: keep last K maskmem frames from current frame in VRAM (default: 1000)
   [--keep_window_pred_masks 60]     # Max cached pred masks in RAM (default: 60)
-  [--no_auto_promote]               # Disable quality-checked auto-promote (default: enabled)
+  [--no_auto_promote]               # Disable quality-checked auto-promote (default: enabled); promote flags below are ignored
   [--promote_interval 500]          # Min gap between two promotions (default: 500)
   [--promote_search_window 50]      # Backward search window for candidate (default: 50)
   [--max_auto_promoted_cond_frames 4]  # Cap of auto-promoted cond frames (default: 4)
@@ -269,9 +269,9 @@ Any code modifying inference memory paths must:
    - `--optimized`: Enable memory optimizations (3-window release + auto-promote).
    - `--release_interval N` (default 60): Run release + auto-promote every N frames.
    - `--max_cache_frames K` (default 10): LRU cap for image tensors in `AsyncVideoFrameLoader` (system RAM).
-   - `--keep_window_maskmem K` (default 1000): Frames kept in `maskmem_features` cache (GPU VRAM).
+   - `--keep_window_maskmem K` (default 1000): Eviction window anchored from **current frame** — frames older than `current_frame_idx - K` are evicted from `maskmem_features` cache (GPU VRAM). Works identically with or without auto-promote.
    - `--keep_window_pred_masks K` (default 60): Frames kept in `pred_masks` cache (system RAM).
-   - `--enable_auto_promote` / `--no_auto_promote` (default: enabled): Quality-checked promotion of non-cond frames to cond.
+   - `--enable_auto_promote` / `--no_auto_promote` (default: enabled): Quality-checked promotion of non-cond frames to cond. When disabled, `--promote_interval`, `--promote_search_window`, and `--max_auto_promoted_cond_frames` are ignored (zero overhead).
    - `--promote_interval N` (default 500): Minimum gap between two auto-promotions.
    - `--promote_search_window N` (default 50): Backward search window for a candidate.
    - `--max_auto_promoted_cond_frames K` (default 4): Cap on auto-promoted cond frames (frame 0 always kept).
@@ -409,18 +409,13 @@ Spec & plan: `docs/superpowers/specs/2026-04-20-metrics-logging-design.md`, `doc
 
 ### Auto-Promote Debug Diagnostics (`scripts/promote_debug_logger.py`, `scripts/plot_promote_debug.py`)
 
-Opt-in runtime diagnostics cho cơ chế auto-promote, giúp trả lời: "auto-promote có chạy đúng không" và "vì sao VRAM vẫn tăng tuyến tính". Bật bằng `--log_promote_debug` (yêu cầu `--optimized --log_metrics`).
+Opt-in runtime diagnostics cho cơ chế auto-promote, giúp trả lời: "auto-promote có chạy đúng không" và "vì sao VRAM vẫn tăng tuyến tính". Bật bằng `--log_promote_debug` (yêu cầu `--optimized --log_metrics`). Khi `--no_auto_promote`, flag này bị silently ignored (không error, không tạo file) — diagnostic chỉ có ý nghĩa khi auto-promote bật.
 
 **Bật log:**
 
 ```bash
-# Case A: auto-promote ON (default)
 python scripts/main_inference.py --optimized --log_metrics --log_promote_debug \
     --run_tag promote_dbg_on
-
-# Case B: auto-promote OFF (tất cả row có action=disabled)
-python scripts/main_inference.py --optimized --no_auto_promote --log_metrics \
-    --log_promote_debug --run_tag promote_dbg_off
 ```
 
 **3 output song song khi bật:**
@@ -450,7 +445,7 @@ python scripts/main_inference.py --optimized --no_auto_promote --log_metrics \
 
 | Chart | File | Ý nghĩa |
 |-------|------|---------|
-| Cond-frame anchor timeline | `01_cond_anchor.png` | `newest_cond` + `oldest_allowed_maskmem` theo thời gian. Scatter xanh lá tại tick promoted. Nếu `newest_cond` đứng yên ở 0 → auto-promote không fire → eviction không trượt. |
+| Cond-frame anchor timeline | `01_cond_anchor.png` | `newest_cond` + `oldest_allowed_maskmem` theo thời gian. Scatter xanh lá tại tick promoted. `oldest_allowed_maskmem` = `frame_idx - keep_window_maskmem` (anchored from current frame, independent of promote). Nếu `newest_cond` đứng yên ở 0 → auto-promote không fire, nhưng eviction vẫn hoạt động bình thường. |
 | Non-cond maskmem accumulation | `02_maskmem_accumulation.png` | `n_non_cond_with_maskmem` vs `n_non_cond_total`. Hai đường gần nhau = không evict maskmem. Phẳng = eviction hoạt động. |
 | Promote funnel per tick | `03_promote_funnel.png` | Bar chart: `candidates_seen` → `with_maskmem` → `with_scores` → `pass_threshold`. Thấy rõ funnel drop-off ở bước nào. |
 
@@ -472,7 +467,7 @@ python scripts/main_inference.py --optimized --no_auto_promote --log_metrics \
 2. Khi qua throttle, funnel drop ở bước nào? → `candidates_seen` → `with_maskmem` → `with_scores` → `pass_threshold`.
 3. Có tick nào `promoted`? → Cột `action` + chart 1 scatter markers.
 4. `newest_cond_after` có tiến khi promoted? → Chart 1 line.
-5. `oldest_allowed_maskmem_after` có tiến theo? → Chart 1 dashed line.
+5. `oldest_allowed_maskmem_after` có tiến theo `frame_idx`? → Chart 1 dashed line (should advance linearly regardless of promote).
 6. `n_non_cond_with_maskmem` bounded hay tăng tuyến tính? → Chart 2.
 
 **Overhead:** ~vài µs/tick (chỉ chạy tại maintenance tick, tức 1 lần mỗi `release_interval` frames). Không có overhead khi không bật flag.
@@ -540,6 +535,18 @@ kf_s = torch.as_tensor(kf).reshape(-1)[0]  # only when kf is not None
 **Impact:** This fix enables auto-promote to actually work. Before the fix, the entire auto-promote + eviction pipeline was silently broken. After the fix, `newest_cond` advances as frames get promoted, eviction anchor slides forward, and VRAM is bounded by `keep_window_maskmem`.
 
 **Diagnostic context:** The bug was discovered using `--log_promote_debug` diagnostics. Funnel showed all candidates passing `maskmem` and `scores` checks but zero passing threshold — because threshold comparison was never reached. Adding temporary `_debug_scores` collection (also inside the `try` block) confirmed the list was empty, pointing to the `except` clause as the culprit.
+
+### `release_old_frames` eviction anchor bug when `--no_auto_promote` (2026-04-26)
+
+**Problem:** The eviction anchor in `release_old_frames` was computed as `max(cond_frame_outputs.keys()) - keep_window`. When auto-promote was disabled (`--no_auto_promote`), the only conditioning frame was frame 0 (the initial bbox). This meant the anchor was always `0 - keep_window_maskmem` (a large negative number), so the eviction condition `frame_idx < anchor` was never true for any frame. Result: nothing was ever evicted, VRAM grew linearly regardless of `--keep_window_maskmem` setting.
+
+**Fix:** Changed the eviction anchor from `max(cond_frame_outputs.keys()) - keep_window` to `current_frame_idx - keep_window`, where `current_frame_idx` is the frame being processed at the time of the maintenance tick. The anchor now slides forward with inference progress, independent of conditioning frame positions.
+
+**Key file:** `sam2/sam2/sam2_video_predictor.py` — `release_old_frames()` method.
+
+**Impact:** Eviction now works correctly in both `--enable_auto_promote` and `--no_auto_promote` modes. With auto-promote ON, behavior is nearly identical (current frame >= newest cond). With auto-promote OFF, VRAM is now properly bounded by `keep_window_maskmem`.
+
+**Context:** This bug was masked because auto-promote (enabled by default) was itself broken by the `torch.stack` shape mismatch (see entry above). Once that fix landed, auto-promote worked and the anchor advanced. But `--no_auto_promote` still exhibited unbounded VRAM growth, revealing the anchor had a dependency on promote that should not have existed.
 
 ## References
 

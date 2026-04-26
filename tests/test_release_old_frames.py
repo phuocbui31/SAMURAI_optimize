@@ -1,5 +1,5 @@
-"""Verify source of release_old_frames does not delete cond_frame_outputs
-and does not call gc.collect() (blocking under GIL, stalls prefetcher)."""
+"""Verify release_old_frames: anchored from current_frame_idx (not newest cond),
+does not delete cond_frame_outputs, and does not call gc.collect()."""
 
 import ast
 import pathlib
@@ -30,6 +30,17 @@ for node in ast.walk(tree):
         assert "gc.collect(" not in body_src, (
             "release_old_frames must not call gc.collect() — it is CPU-bound, "
             "doesn't release the GIL, and stalls the prefetcher thread"
+        )
+        # --- new: current_frame_idx is the eviction anchor ---
+        param_names = [a.arg for a in node.args.args]
+        assert "current_frame_idx" in param_names, (
+            "release_old_frames must accept current_frame_idx parameter "
+            "(eviction anchor is current frame, not newest cond)"
+        )
+
+        assert "newest_cond = max(" not in body_src, (
+            "release_old_frames must NOT compute newest_cond = max(cond_outputs); "
+            "eviction anchor is now current_frame_idx"
         )
         print("PASS")
         break

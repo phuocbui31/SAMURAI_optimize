@@ -662,16 +662,21 @@ class SAM2VideoPredictor(SAM2Base):
     def release_old_frames(
         self,
         inference_state,
+        current_frame_idx,
         keep_window_maskmem=1000,
         keep_window_pred_masks=60,
     ):
         """
         Release heavy tensors of old non-conditioning frames to reduce memory.
 
+        Eviction anchor is `current_frame_idx` (the frame just processed), NOT
+        the newest conditioning frame. This ensures eviction works even when
+        auto-promote is disabled and the only cond frame is frame 0.
+
         Keeps scores (best_iou_score, object_score_logits, kf_score, obj_ptr) so
         Memory Selection logic in sam2_base.py continues to work after eviction.
 
-        Three independent windows:
+        Three independent windows (relative to current_frame_idx):
         - keep_window_maskmem: controls maskmem_features + maskmem_pos_enc (GPU VRAM)
         - keep_window_pred_masks: controls pred_masks (CPU RAM)
         - cached_features: evicted together with maskmem
@@ -680,15 +685,10 @@ class SAM2VideoPredictor(SAM2Base):
         They are managed separately by _maybe_promote_cond_frame (Phase 4).
         """
         output_dict = inference_state["output_dict"]
-        cond_outputs = output_dict["cond_frame_outputs"]
         non_cond_outputs = output_dict["non_cond_frame_outputs"]
 
-        if not cond_outputs:
-            return
-
-        newest_cond = max(cond_outputs.keys())
-        oldest_allowed_maskmem = newest_cond - keep_window_maskmem
-        oldest_allowed_pred_masks = newest_cond - keep_window_pred_masks
+        oldest_allowed_maskmem = current_frame_idx - keep_window_maskmem
+        oldest_allowed_pred_masks = current_frame_idx - keep_window_pred_masks
 
         for frame_idx in list(non_cond_outputs.keys()):
             entry = non_cond_outputs[frame_idx]
@@ -728,7 +728,7 @@ class SAM2VideoPredictor(SAM2Base):
         images_container = inference_state["images"]
         if hasattr(images_container, "evict_old_frames"):
             keep_start = max(0, oldest_allowed_maskmem)
-            keep_end = newest_cond + keep_window_maskmem + 1
+            keep_end = current_frame_idx + keep_window_maskmem + 1
             images_container.evict_old_frames(keep_start, keep_end)
 
     def append_frame_as_cond_frame(self, inference_state, frame_idx):
@@ -950,7 +950,7 @@ class SAM2VideoPredictor(SAM2Base):
         """Propagate the input points across frames to track in the entire video."""
         import warnings
 
-        if promote_search_window > keep_window_maskmem:
+        if enable_auto_promote and promote_search_window > keep_window_maskmem:
             warnings.warn(
                 f"promote_search_window ({promote_search_window}) > "
                 f"keep_window_maskmem ({keep_window_maskmem}); candidate frames "
@@ -1045,18 +1045,18 @@ class SAM2VideoPredictor(SAM2Base):
                 and frame_idx % release_interval == 0
                 and not reverse
             ):
-                cond_outputs_ref = inference_state["output_dict"]["cond_frame_outputs"]
-                non_cond_ref = inference_state["output_dict"]["non_cond_frame_outputs"]
-
-                # -- snapshot BEFORE --
-                _debug_logging = promote_debug_logger is not None
-                if _debug_logging:
-                    cond_keys_before = sorted(cond_outputs_ref.keys())
-                    cond_excl_zero = [k for k in cond_keys_before if k != 0]
-                    nearest_cond_before = max(cond_excl_zero) if cond_excl_zero else 0
-
-                # -- auto-promote --
+                # -- auto-promote (only when enabled) --
                 if enable_auto_promote:
+                    cond_outputs_ref = inference_state["output_dict"]["cond_frame_outputs"]
+                    non_cond_ref = inference_state["output_dict"]["non_cond_frame_outputs"]
+
+                    # -- snapshot BEFORE --
+                    _debug_logging = promote_debug_logger is not None
+                    if _debug_logging:
+                        cond_keys_before = sorted(cond_outputs_ref.keys())
+                        cond_excl_zero = [k for k in cond_keys_before if k != 0]
+                        nearest_cond_before = max(cond_excl_zero) if cond_excl_zero else 0
+
                     promote_stats = self._maybe_promote_cond_frame(
                         inference_state,
                         frame_idx,
@@ -1064,80 +1064,70 @@ class SAM2VideoPredictor(SAM2Base):
                         promote_search_window=promote_search_window,
                         max_auto_promoted_cond_frames=max_auto_promoted_cond_frames,
                     )
-                else:
-                    promote_stats = {
-                        "action": "disabled",
-                        "candidate_idx": "",
-                        "search_start": "",
-                        "search_end": "",
-                        "candidates_seen": 0,
-                        "candidates_with_maskmem": 0,
-                        "candidates_with_scores": 0,
-                        "candidates_pass_threshold": 0,
-                    }
 
-                # -- release --
+                    # -- snapshot AFTER + log --
+                    if _debug_logging:
+                        newest_cond = max(cond_outputs_ref.keys())
+                        oldest_maskmem = frame_idx - keep_window_maskmem
+                        oldest_pred = frame_idx - keep_window_pred_masks
+
+                        n_non_cond_total = len(non_cond_ref)
+                        n_maskmem = sum(
+                            1 for e in non_cond_ref.values()
+                            if e.get("maskmem_features") is not None
+                        )
+                        n_pred = sum(
+                            1 for e in non_cond_ref.values()
+                            if e.get("pred_masks") is not None
+                        )
+                        n_cond_total = len(cond_outputs_ref)
+                        n_auto = len([k for k in cond_outputs_ref.keys() if k != 0])
+
+                        row = {
+                            "frame_idx": frame_idx,
+                            "release_interval": release_interval,
+                            "enable_auto_promote": enable_auto_promote,
+                            "promote_interval": promote_interval,
+                            "promote_search_window": promote_search_window,
+                            "keep_window_maskmem": keep_window_maskmem,
+                            "keep_window_pred_masks": keep_window_pred_masks,
+                            "cond_keys_before": cond_keys_before,
+                            "nearest_cond_excl_zero_before": nearest_cond_before,
+                            "cond_keys_after": sorted(cond_outputs_ref.keys()),
+                            "newest_cond_after": newest_cond,
+                            "auto_promote_attempted": 1,
+                            **promote_stats,
+                            "oldest_allowed_maskmem_after": oldest_maskmem,
+                            "oldest_allowed_pred_masks_after": oldest_pred,
+                            "n_non_cond_total": n_non_cond_total,
+                            "n_non_cond_with_maskmem": n_maskmem,
+                            "n_non_cond_with_pred_masks": n_pred,
+                            "n_cond_total": n_cond_total,
+                            "n_auto_promoted_cond": n_auto,
+                        }
+                        tqdm.write(promote_debug_logger.format_terminal_line(row))
+                        promote_debug_logger.log(row)
+                        # TEMP DEBUG: dump candidate scores when no_candidate
+                        _dbg = promote_stats.get("_debug_scores", [])
+                        if promote_stats["action"] == "no_candidate" and _dbg:
+                            ious = [s["iou"] for s in _dbg]
+                            objs = [s["obj"] for s in _dbg]
+                            kfs = [s["kf"] for s in _dbg if s["kf"] is not None]
+                            tqdm.write(
+                                f"  [ScoreDbg] n={len(_dbg)} "
+                                f"iou=[{min(ious):.4f}, {max(ious):.4f}] "
+                                f"obj=[{min(objs):.4f}, {max(objs):.4f}] "
+                                f"kf={'['+f'{min(kfs):.4f}, {max(kfs):.4f}'+']' if kfs else 'None'} "
+                                f"thresh: iou>{self.memory_bank_iou_threshold} obj>{self.memory_bank_obj_score_threshold}"
+                            )
+
+                # -- release (always, anchored to current frame) --
                 self.release_old_frames(
                     inference_state,
+                    current_frame_idx=frame_idx,
                     keep_window_maskmem=keep_window_maskmem,
                     keep_window_pred_masks=keep_window_pred_masks,
                 )
-
-                # -- snapshot AFTER + log --
-                if _debug_logging:
-                    newest_cond = max(cond_outputs_ref.keys())
-                    oldest_maskmem = newest_cond - keep_window_maskmem
-                    oldest_pred = newest_cond - keep_window_pred_masks
-
-                    n_non_cond_total = len(non_cond_ref)
-                    n_maskmem = sum(
-                        1 for e in non_cond_ref.values()
-                        if e.get("maskmem_features") is not None
-                    )
-                    n_pred = sum(
-                        1 for e in non_cond_ref.values()
-                        if e.get("pred_masks") is not None
-                    )
-                    n_cond_total = len(cond_outputs_ref)
-                    n_auto = len([k for k in cond_outputs_ref.keys() if k != 0])
-
-                    row = {
-                        "frame_idx": frame_idx,
-                        "release_interval": release_interval,
-                        "enable_auto_promote": enable_auto_promote,
-                        "promote_interval": promote_interval,
-                        "promote_search_window": promote_search_window,
-                        "keep_window_maskmem": keep_window_maskmem,
-                        "keep_window_pred_masks": keep_window_pred_masks,
-                        "cond_keys_before": cond_keys_before,
-                        "nearest_cond_excl_zero_before": nearest_cond_before,
-                        "cond_keys_after": sorted(cond_outputs_ref.keys()),
-                        "newest_cond_after": newest_cond,
-                        "auto_promote_attempted": 1 if enable_auto_promote else 0,
-                        **promote_stats,
-                        "oldest_allowed_maskmem_after": oldest_maskmem,
-                        "oldest_allowed_pred_masks_after": oldest_pred,
-                        "n_non_cond_total": n_non_cond_total,
-                        "n_non_cond_with_maskmem": n_maskmem,
-                        "n_non_cond_with_pred_masks": n_pred,
-                        "n_cond_total": n_cond_total,
-                        "n_auto_promoted_cond": n_auto,
-                    }
-                    tqdm.write(promote_debug_logger.format_terminal_line(row))
-                    promote_debug_logger.log(row)
-                    # TEMP DEBUG: dump candidate scores when no_candidate
-                    _dbg = promote_stats.get("_debug_scores", [])
-                    if promote_stats["action"] == "no_candidate" and _dbg:
-                        ious = [s["iou"] for s in _dbg]
-                        objs = [s["obj"] for s in _dbg]
-                        kfs = [s["kf"] for s in _dbg if s["kf"] is not None]
-                        tqdm.write(
-                            f"  [ScoreDbg] n={len(_dbg)} "
-                            f"iou=[{min(ious):.4f}, {max(ious):.4f}] "
-                            f"obj=[{min(objs):.4f}, {max(objs):.4f}] "
-                            f"kf={'['+f'{min(kfs):.4f}, {max(kfs):.4f}'+']' if kfs else 'None'} "
-                            f"thresh: iou>{self.memory_bank_iou_threshold} obj>{self.memory_bank_obj_score_threshold}"
-                        )
             yield frame_idx, obj_ids, video_res_masks
 
     def _add_output_per_object(
