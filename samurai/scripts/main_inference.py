@@ -5,7 +5,11 @@ import numpy as np
 import os
 import os.path as osp
 import pdb
+import sys
 import torch
+
+sys.path.insert(0, osp.join(osp.dirname(osp.dirname(__file__)), "sam2"))
+
 from sam2.build_sam import build_sam2_video_predictor
 from tqdm import tqdm
 
@@ -49,6 +53,12 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Bật ghi metric per-frame (iter/s, RAM, VRAM) ra CSV.",
+)
+parser.add_argument(
+    "--log_maskmem_profile",
+    action="store_true",
+    default=False,
+    help="Bật ghi maskmem distance profile per-frame ra CSV.",
 )
 parser.add_argument(
     "--log_state_size",
@@ -100,6 +110,9 @@ if args.evaluate:
 if args.log_metrics:
     from metrics_logger import MetricsLogger
 
+if args.log_maskmem_profile:
+    from maskmem_profile_logger import MaskmemProfileLogger
+
 color = [
     (255, 0, 0),
 ]
@@ -123,7 +136,7 @@ else:
 video_folder = data_root
 pred_folder = f"results/{exp_name}/{exp_name}_{model_name}"
 
-if args.log_metrics:
+if args.log_metrics or args.log_maskmem_profile:
     metrics_dir = (
         args.metrics_dir
         if args.metrics_dir
@@ -161,104 +174,117 @@ try:
         predictor = build_sam2_video_predictor(model_cfg, checkpoint, device="cuda:0")
 
         predictions = []
+        metrics_logger = None
+        maskmem_profile_logger = None
+        out = None
 
         if args.log_metrics:
             csv_path = osp.join(metrics_dir, args.run_tag, f"{video_basename}.csv")
             metrics_logger = MetricsLogger(csv_path)
-        else:
-            metrics_logger = None
 
-        if save_to_video:
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            out = cv2.VideoWriter(
-                osp.join(vis_folder, f"{video_basename}.mp4"),
-                fourcc,
-                30,
-                (width, height),
+        if args.log_maskmem_profile:
+            maskmem_profile_logger = MaskmemProfileLogger(
+                video_name=video_basename,
+                output_dir=osp.join(metrics_dir, args.run_tag),
+                num_frames_total=num_frames,
             )
 
-        # Start processing frames
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
-            state = predictor.init_state(
-                frame_folder,
-                offload_video_to_cpu=True,
-                offload_state_to_cpu=True,
-                async_loading_frames=True,
-            )
-
-            prompts = load_lasot_gt(
-                osp.join(video_folder, cat_name, video.strip(), "groundtruth.txt")
-            )
-
-            bbox, track_label = prompts[0]
-            frame_idx, object_ids, masks = predictor.add_new_points_or_box(
-                state, box=bbox, frame_idx=0, obj_id=0
-            )
-
-            for frame_idx, object_ids, masks in predictor.propagate_in_video(state):
-                if metrics_logger is not None:
-                    state_stats = None
-                    if args.log_state_size and hasattr(predictor, "get_state_size_stats"):
-                        state_stats = predictor.get_state_size_stats(state)
-                    metrics_logger.log(frame_idx, state_stats=state_stats)
-                mask_to_vis = {}
-                bbox_to_vis = {}
-
-                assert len(masks) == 1 and len(object_ids) == 1, (
-                    "Only one object is supported right now"
+        try:
+            if save_to_video:
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                out = cv2.VideoWriter(
+                    osp.join(vis_folder, f"{video_basename}.mp4"),
+                    fourcc,
+                    30,
+                    (width, height),
                 )
-                for obj_id, mask in zip(object_ids, masks):
-                    mask = mask[0].cpu().numpy()
-                    mask = mask > 0.0
-                    non_zero_indices = np.argwhere(mask)
-                    if len(non_zero_indices) == 0:
-                        bbox = [0, 0, 0, 0]
-                    else:
-                        y_min, x_min = non_zero_indices.min(axis=0).tolist()
-                        y_max, x_max = non_zero_indices.max(axis=0).tolist()
-                        bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
-                    bbox_to_vis[obj_id] = bbox
-                    mask_to_vis[obj_id] = mask
 
-                if save_to_video:
-                    img = cv2.imread(f"{frame_folder}/{frame_idx + 1:08d}.jpg")
-                    if img is None:
-                        break
+            # Start processing frames
+            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+                state = predictor.init_state(
+                    frame_folder,
+                    offload_video_to_cpu=True,
+                    offload_state_to_cpu=True,
+                    async_loading_frames=True,
+                )
 
-                    for obj_id in mask_to_vis.keys():
-                        mask_img = np.zeros((height, width, 3), np.uint8)
-                        mask_img[mask_to_vis[obj_id]] = color[(obj_id + 1) % len(color)]
-                        img = cv2.addWeighted(img, 1, mask_img, 0.75, 0)
+                prompts = load_lasot_gt(
+                    osp.join(video_folder, cat_name, video.strip(), "groundtruth.txt")
+                )
 
-                    for obj_id in bbox_to_vis.keys():
-                        cv2.rectangle(
-                            img,
-                            (bbox_to_vis[obj_id][0], bbox_to_vis[obj_id][1]),
-                            (
-                                bbox_to_vis[obj_id][0] + bbox_to_vis[obj_id][2],
-                                bbox_to_vis[obj_id][1] + bbox_to_vis[obj_id][3],
-                            ),
-                            color[(obj_id) % len(color)],
-                            2,
-                        )
+                bbox, track_label = prompts[0]
+                frame_idx, object_ids, masks = predictor.add_new_points_or_box(
+                    state, box=bbox, frame_idx=0, obj_id=0
+                )
 
-                    x1, y1, x2, y2 = prompts[frame_idx][0]
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    out.write(img)
+                for frame_idx, object_ids, masks in predictor.propagate_in_video(
+                    state,
+                    maskmem_profile_logger=maskmem_profile_logger,
+                ):
+                    if metrics_logger is not None:
+                        state_stats = None
+                        if args.log_state_size and hasattr(predictor, "get_state_size_stats"):
+                            state_stats = predictor.get_state_size_stats(state)
+                        metrics_logger.log(frame_idx, state_stats=state_stats)
+                    mask_to_vis = {}
+                    bbox_to_vis = {}
 
-                predictions.append(bbox_to_vis)
+                    assert len(masks) == 1 and len(object_ids) == 1, (
+                        "Only one object is supported right now"
+                    )
+                    for obj_id, mask in zip(object_ids, masks):
+                        mask = mask[0].cpu().numpy()
+                        mask = mask > 0.0
+                        non_zero_indices = np.argwhere(mask)
+                        if len(non_zero_indices) == 0:
+                            bbox = [0, 0, 0, 0]
+                        else:
+                            y_min, x_min = non_zero_indices.min(axis=0).tolist()
+                            y_max, x_max = non_zero_indices.max(axis=0).tolist()
+                            bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
+                        bbox_to_vis[obj_id] = bbox
+                        mask_to_vis[obj_id] = mask
+
+                    if save_to_video:
+                        img = cv2.imread(f"{frame_folder}/{frame_idx + 1:08d}.jpg")
+                        if img is None:
+                            break
+
+                        for obj_id in mask_to_vis.keys():
+                            mask_img = np.zeros((height, width, 3), np.uint8)
+                            mask_img[mask_to_vis[obj_id]] = color[(obj_id + 1) % len(color)]
+                            img = cv2.addWeighted(img, 1, mask_img, 0.75, 0)
+
+                        for obj_id in bbox_to_vis.keys():
+                            cv2.rectangle(
+                                img,
+                                (bbox_to_vis[obj_id][0], bbox_to_vis[obj_id][1]),
+                                (
+                                    bbox_to_vis[obj_id][0] + bbox_to_vis[obj_id][2],
+                                    bbox_to_vis[obj_id][1] + bbox_to_vis[obj_id][3],
+                                ),
+                                color[(obj_id) % len(color)],
+                                2,
+                            )
+
+                        x1, y1, x2, y2 = prompts[frame_idx][0]
+                        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        out.write(img)
+
+                    predictions.append(bbox_to_vis)
+        finally:
+            if metrics_logger is not None:
+                metrics_logger.close()
+            if maskmem_profile_logger is not None:
+                maskmem_profile_logger.close()
+            if save_to_video and out is not None:
+                out.release()
 
         os.makedirs(pred_folder, exist_ok=True)
         with open(osp.join(pred_folder, f"{video_basename}.txt"), "w") as f:
             for pred in predictions:
                 x, y, w, h = pred[0]
                 f.write(f"{x},{y},{w},{h}\n")
-
-        if save_to_video:
-            out.release()
-
-        if metrics_logger is not None:
-            metrics_logger.close()
 
         if args.evaluate:
             seq_dir = osp.join(video_folder, cat_name, video.strip())
