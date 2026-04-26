@@ -167,3 +167,6 @@ demo/
 report/
 
 .vscode/
+
+# Local git worktrees
+.worktrees/
