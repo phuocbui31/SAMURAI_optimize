@@ -1,10 +1,16 @@
 """Runtime smoke test for plot_maskmem_profile.py using tiny fake CSVs."""
 
 import csv
+import importlib.util
 import pathlib
 import subprocess
 import sys
 import tempfile
+
+for module_name in ("matplotlib", "numpy", "pandas"):
+    if importlib.util.find_spec(module_name) is None:
+        print(f"SKIP: {module_name} is not installed")
+        raise SystemExit(0)
 
 COLUMNS = [
     "frame_idx",

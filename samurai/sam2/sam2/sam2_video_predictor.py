@@ -710,6 +710,17 @@ class SAM2VideoPredictor(SAM2Base):
                 storage_key = "cond_frame_outputs"
                 current_out = output_dict[storage_key][frame_idx]
                 pred_masks = current_out["pred_masks"]
+                if maskmem_profile_logger is not None:
+                    maskmem_profile_logger.log(
+                        frame_idx=frame_idx,
+                        maskmem_frame_indices=[],
+                        maskmem_iou_scores=[],
+                        maskmem_obj_scores=[],
+                        maskmem_kf_scores=[],
+                        scan_depth=0,
+                        n_candidates_rejected=0,
+                        scan_farthest_checked=-1,
+                    )
                 if clear_non_cond_mem:
                     # clear non-conditioning memory of the surrounding frames
                     self._clear_non_cond_mem_around_input(inference_state, frame_idx)
@@ -717,6 +728,17 @@ class SAM2VideoPredictor(SAM2Base):
                 storage_key = "non_cond_frame_outputs"
                 current_out = output_dict[storage_key][frame_idx]
                 pred_masks = current_out["pred_masks"]
+                if maskmem_profile_logger is not None:
+                    maskmem_profile_logger.log(
+                        frame_idx=frame_idx,
+                        maskmem_frame_indices=[],
+                        maskmem_iou_scores=[],
+                        maskmem_obj_scores=[],
+                        maskmem_kf_scores=[],
+                        scan_depth=0,
+                        n_candidates_rejected=0,
+                        scan_farthest_checked=-1,
+                    )
             else:
                 storage_key = "non_cond_frame_outputs"
                 current_out, pred_masks = self._run_single_frame_inference(

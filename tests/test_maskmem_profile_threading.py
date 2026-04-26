@@ -56,8 +56,15 @@ def test_predictor_signatures_and_tokens():
         "maskmem_profile_logger=maskmem_profile_logger",
         "self._run_single_frame_inference",
         "self.track_step",
+        "consolidated_frame_inds[\"cond_frame_outputs\"]",
+        "consolidated_frame_inds[\"non_cond_frame_outputs\"]",
+        "maskmem_frame_indices=[]",
+        "scan_farthest_checked=-1",
     ]:
         assert token in src, f"{PREDICTOR_PATH} missing token {token!r}"
+    assert src.count("maskmem_frame_indices=[]") >= 2, (
+        "expected empty profile rows for consolidated cond and non-cond frames"
+    )
 
 
 test_base_signatures_and_tokens()
