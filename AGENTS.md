@@ -28,6 +28,8 @@ Checkpoints: `cd sam2/checkpoints && ./download_ckpts.sh`.
 - Multi-GPU (8 chunks): `bash scripts/inference.sh` (uses `CUDA_VISIBLE_DEVICES`).
 - Demo on a video: `python scripts/demo.py --video_path <video.mp4|frames_dir> --txt_path <bbox.txt>` (bbox is `x,y,w,h`, one line).
 - Log per-frame metric: thêm `--log_metrics --run_tag <tag>` (mặc định ghi vào `metrics/{exp_name}_{model_name}/{run_tag}/<video>.csv`, schema 7 cột `frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,vram_peak_mb`). Override thư mục: `--metrics_dir <path>`. Xem `scripts/metrics_logger.py`.
+- Log SAMURAI original maskmem distance profile: `python samurai/scripts/main_inference.py --log_maskmem_profile --metrics_dir metrics/samurai_maskmem --run_tag async` or preload mode with `python samurai/scripts/main_inference_preload.py --log_maskmem_profile --metrics_dir metrics/samurai_maskmem --run_tag preload`. Output: `{metrics_dir}/{run_tag}/{video}_maskmem_profile.csv` with selected non-cond maskmem frames, distances, scores, scan depth, and rejection stats.
+- Plot maskmem profile: `python samurai/scripts/plot_maskmem_profile.py --csv_dir metrics/samurai_maskmem/async --mode per_video` or aggregate overlay with `python samurai/scripts/plot_maskmem_profile.py --csv_dir metrics/samurai_maskmem/async --csv_dir metrics/samurai_maskmem/preload --label Async --label Preload --mode aggregate`. Aggregate mode prints percentile-based `keep_window_maskmem` recommendations.
 - Vẽ biểu đồ so sánh runs: `python scripts/plot_metrics.py --run metrics/.../baseline --run metrics/.../optimized --label Baseline --label Optimized --mode per_video` (hoặc `--mode concat` cho 1 chart toàn run). Output PNG ở `plots/<timestamp>/`. Xem `scripts/plot_metrics.py`.
 
 ## Tests
@@ -39,6 +41,8 @@ for f in tests/test_*.py; do echo "== $f =="; python "$f" || break; done
 ```
 
 Run a single test: `python tests/test_max_cache_frames.py`.
+
+Maskmem profile smoke tests: `python tests/test_maskmem_profile_logger.py`, `python tests/test_maskmem_profile_threading.py`, `python tests/test_maskmem_profile_cli.py`, `python tests/test_plot_maskmem_profile_cli.py`, and `python tests/test_plot_maskmem_profile_runtime.py`.
 
 Benchmarks (slow, require GPU + data): `python tests/bench_inference.py`, comparison: `python tests/compare_results.py`.
 
