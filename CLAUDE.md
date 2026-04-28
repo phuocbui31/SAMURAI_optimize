@@ -479,6 +479,93 @@ AST smoke tests:
 
 Spec & plan: `docs/superpowers/specs/2026-04-25-auto-promote-cond-debug-design.md`, `docs/superpowers/plans/2026-04-25-auto-promote-debug-visualize.md`.
 
+### Maskmem Distance Profiling (`samurai/scripts/maskmem_profile_logger.py`, `samurai/scripts/plot_maskmem_profile.py`)
+
+Opt-in instrumentation cho bản SAMURAI gốc (`samurai/`) để thu thập dữ liệu về khoảng cách giữa frame đang xử lý và các maskmem frames được chọn cho cross-attention. Mục tiêu: xác định `keep_window_maskmem` tối ưu cho bản optimized.
+
+**Bật log:** thêm `--log_maskmem_profile` vào `samurai/scripts/main_inference.py` hoặc `samurai/scripts/main_inference_preload.py`. Mặc định off → 0 overhead, 0 import thêm. Dùng chung `--metrics_dir` và `--run_tag` nhưng independent với `--log_metrics`.
+
+```bash
+# Async mode
+python samurai/scripts/main_inference.py --log_maskmem_profile \
+    --metrics_dir metrics/samurai_maskmem --run_tag async
+
+# Preload mode
+python samurai/scripts/main_inference_preload.py --log_maskmem_profile \
+    --metrics_dir metrics/samurai_maskmem --run_tag preload
+```
+
+Output: `{metrics_dir}/{run_tag}/{video}_maskmem_profile.csv`.
+
+**CSV schema (17 cột, 1 file/video):**
+
+| Nhóm | Cột |
+|------|-----|
+| Context | `frame_idx`, `num_frames_total`, `video_name` |
+| Non-cond maskmem selected | `n_maskmem_selected`, `maskmem_frame_indices` (JSON), `maskmem_min_distance`, `maskmem_max_distance`, `maskmem_mean_distance`, `maskmem_distances` (JSON) |
+| Scores | `maskmem_iou_scores` (JSON), `maskmem_obj_scores` (JSON), `maskmem_kf_scores` (JSON) |
+| Backward scan | `scan_depth`, `n_candidates_rejected`, `scan_farthest_checked` |
+| Quality summary | `min_iou_of_selected`, `mean_iou_of_selected` |
+
+Logging xảy ra trong `_prepare_memory_conditioned_features` (sam2_base.py) sau khi SAMURAI chọn xong maskmem frames cho cross-attention. Cond frames không được log (frame 0 luôn là cond frame duy nhất trong bản gốc).
+
+**Vẽ biểu đồ:**
+
+```bash
+# Per-video (3 charts/video: max_distance, distance_heatmap, scan_stats)
+python samurai/scripts/plot_maskmem_profile.py \
+    --csv_dir metrics/samurai_maskmem/async --mode per_video [--video airplane-1]
+
+# Aggregate overlay 2 run (3 charts: CDF, boxplot, scan_vs_iou)
+python samurai/scripts/plot_maskmem_profile.py \
+    --csv_dir metrics/samurai_maskmem/async \
+    --csv_dir metrics/samurai_maskmem/preload \
+    --label Async --label Preload --mode aggregate
+```
+
+Aggregate mode in terminal recommendation:
+```
+=== keep_window_maskmem recommendation ===
+P50  max_distance:   45  → keep_window=45  covers 50% frames
+P90  max_distance:  180  → keep_window=180 covers 90% frames
+P95  max_distance:  320  → keep_window=320 covers 95% frames
+P99  max_distance:  890  → keep_window=890 covers 99% frames
+P100 max_distance: 1800  → keep_window=1800 covers 100% frames
+```
+
+**6 charts:**
+
+| # | File | Mode | Ý nghĩa |
+|---|------|------|---------|
+| 1 | `01_max_distance.png` | per_video | Max distance over time — nếu bounded ≤ K → `keep_window=K` đủ |
+| 2 | `02_distance_heatmap.png` | per_video | Distance distribution heatmap (x=frame, y=distance) |
+| 3 | `03_scan_stats.png` | per_video | Scan depth (bar) + rejection rate (line) |
+| 4 | `04_max_distance_cdf.png` | aggregate | CDF — dùng trực tiếp để chọn keep_window |
+| 5 | `05_per_video_boxplot.png` | aggregate | Per-video max_distance distribution, thấy outlier videos |
+| 6 | `06_scan_depth_vs_iou.png` | aggregate | Scatter: scan_depth vs mean_iou |
+
+**Instrumentation call chain:** `main_inference.py` → `propagate_in_video(maskmem_profile_logger=)` → `_run_single_frame_inference` → `track_step` → `_track_step` → `_prepare_memory_conditioned_features` (log here).
+
+**Files touched (trong `samurai/`):**
+
+| File | Change |
+|------|--------|
+| `samurai/scripts/maskmem_profile_logger.py` | New. Class `MaskmemProfileLogger` (`__init__`, `log`, `close`). |
+| `samurai/scripts/plot_maskmem_profile.py` | New. Standalone plot script, 6 chart functions + `main`. |
+| `samurai/scripts/main_inference.py` | `--log_maskmem_profile` flag, conditional import, create/pass/close logger. |
+| `samurai/scripts/main_inference_preload.py` | Same as above. |
+| `samurai/sam2/sam2/modeling/sam2_base.py` | `maskmem_profile_logger=None` param threaded through `track_step`, `_track_step`, `_prepare_memory_conditioned_features`. |
+| `samurai/sam2/sam2/sam2_video_predictor.py` | `maskmem_profile_logger=None` param threaded through `propagate_in_video`, `_run_single_frame_inference`. |
+
+AST smoke tests:
+- `tests/test_maskmem_profile_logger.py` — runtime test (3 log → 4 row CSV, 17 columns, empty selection, idempotent close) + AST class signature.
+- `tests/test_maskmem_profile_threading.py` — AST test for `maskmem_profile_logger` param in call-chain functions + guarded logging tokens.
+- `tests/test_maskmem_profile_cli.py` — AST test for `--log_maskmem_profile` flag + tokens in both inference scripts.
+- `tests/test_plot_maskmem_profile_cli.py` — AST test for plot CLI flags + 6 required functions + Agg backend ordering.
+- `tests/test_plot_maskmem_profile_runtime.py` — runtime test: fake CSVs → 6 PNG charts produced.
+
+Spec & plan: `docs/superpowers/specs/2026-04-26-maskmem-distance-profile-design.md`, `docs/superpowers/plans/2026-04-26-maskmem-distance-profile-multi-agent.md`.
+
 ## FAQ & Troubleshooting
 
 **Q: Do I need to train SAMURAI?**
