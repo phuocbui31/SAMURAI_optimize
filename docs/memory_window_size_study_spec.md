@@ -266,6 +266,7 @@ Script tự phát hiện dataset từ số categories trong `training_set.txt` v
 
 **Setting:**
 - Model: SAMURAI gốc (không modification logic, chỉ thêm logging hooks).
+- Inference script: `samurai/scripts/main_inference_preload.py` (preload mode — deterministic frame loading, throughput ổn định).
 - Memory bank: $K = 7$ slots cố định.
 - Candidate pool: $\mathcal{C}_t(\infty)$ — toàn bộ history.
 - Selection: motion-aware top-K.
@@ -389,26 +390,52 @@ Stage 3 (test)          280×3 videos, ~36h GPU   12×3 videos, ~0.4h GPU
 - **Non-invasive:** logging hooks không thay đổi logic của model. Validation: chạy có/không log, AUC delta < 1e-4.
 - **Log một lần, phân tích nhiều lần:** log đủ context để mọi analysis sau không cần chạy lại model.
 - **Resumable:** mỗi video lưu file riêng, hỗ trợ resume nếu run interrupted.
+- **Hook point:** Per-frame logging xảy ra trong `_prepare_memory_conditioned_features` (`sam2/sam2/modeling/sam2_base.py`) — sau khi SAMURAI chọn xong frames cho cross-attention. Đây là điểm duy nhất reflect ground truth về memory bank composition tại frame $t$.
+- **Threading qua call chain:** Logger instance được tạo trong `main_inference{,_preload}.py`, thread qua `propagate_in_video` → `_run_single_frame_inference` → `track_step` → `_track_step` → `_prepare_memory_conditioned_features`. Mọi function chấp nhận `logger=None` mặc định.
+- **Guard pattern:** Trong hot path, `if logger is not None: logger.log(...)` — khi flag tắt, zero overhead (không collect, không format).
+- **Logger lifecycle:** Một instance per video, line-buffered I/O (crash-safe), `close()` idempotent, file path `{metrics_dir}/{run_tag}/{video_id}_stage1.csv`.
 
 ### 6.2 Stage 1 — per-frame log requirements
 
-**Mỗi current frame $t$ phải log:**
+Per-frame log của Stage 1 = **maskmem profile schema (đã implement)** + **Stage 1 extensions**. Hai bảng dưới phân biệt fields kế thừa và fields cần extend.
+
+**Bảng B1 — Fields kế thừa từ maskmem profile logger** (đã có, reuse):
+
+| Field (CSV column) | Map sang spec mới | Nguồn |
+|---|---|---|
+| `frame_idx` | `frame_idx` | direct |
+| `num_frames_total` | `video_length` | direct |
+| `video_name` | `video_id` | direct |
+| `maskmem_frame_indices` (JSON) | `memory_indices` | direct |
+| `maskmem_distances` (JSON) | derived → $\mathcal{D}_A$ | direct |
+| `maskmem_max_distance` | derived → $\mathcal{D}_B$ | direct |
+| `maskmem_min_distance`, `maskmem_mean_distance` | summary stats | direct |
+| `maskmem_iou_scores` (JSON) | `memory_iou_scores` | direct |
+| `maskmem_obj_scores` (JSON) | `memory_obj_scores` | direct |
+| `maskmem_kf_scores` (JSON) | `memory_kalman_scores` | direct |
+| `n_maskmem_selected` | `len(memory_indices)` | direct |
+| `scan_depth`, `n_candidates_rejected`, `scan_farthest_checked` | post-hoc Section 8.6 (lost selections) | direct |
+| `min_iou_of_selected`, `mean_iou_of_selected` | quality summary (selected frames) | direct |
+
+**Bảng B2 — Fields cần extend cho Stage 1** (write thêm vào cùng row CSV):
 
 | Field | Description |
 |---|---|
-| `video_id`, `category` | Identifier |
-| `frame_idx`, `video_length` | Position context |
-| `memory_indices` | Sorted list các index trong $\mathcal{M}_t$ (length ≤ K) |
-| `memory_scores` | Composite scores tương ứng |
-| `memory_kalman_scores`, `memory_iou_scores`, `memory_obj_scores` | Score breakdown |
-| `predicted_bbox` | $\hat{b}_t$ |
-| `predicted_iou` | IoU vs GT (nullable) |
-| `gt_bbox` | $b_t$ (nullable) |
-| `attributes` | List attributes active tại frame |
+| `category` | LaSOT category string |
+| `split` | `train_dev` / `train_val` / `test` |
+| `predicted_bbox` | $\hat{b}_t$ (JSON `[x,y,w,h]`) |
+| `predicted_iou` | IoU vs GT (nullable nếu GT không available) |
+| `gt_bbox` | $b_t$ (JSON, nullable) |
+| `attributes` | Attributes active tại frame (JSON list) |
 | `inference_time_ms` | Per-frame timing |
-| `membank_ram_bytes` | Memory bank RAM tại frame này (xem Section 7) |
+| `membank_ram_bytes` | Memory bank RAM (Section 7) |
+| `process_rss_bytes` | psutil RSS (cross-check) |
+| `gpu_vram_bytes` | Peak VRAM tại frame |
+| `samurai_commit_hash` | Git commit hash (sidecar metadata file thay vì repeat mỗi row) |
 
-**Format:** Parquet (columnar, compressed).
+**Composite score note:** Spec định nghĩa $s = \alpha s_{\text{kf}} + \beta s_{\text{iou}} + \gamma s_{\text{obj}}$. Vì component scores đã log raw ở B1, composite derive offline khi analyze — **không** thêm column `memory_scores` vào CSV.
+
+**Format:** CSV per-video (line-buffered, append-friendly, crash-safe). Cuối Stage 1, một script `csv_to_parquet.py` consolidate tất cả CSV → 1 file Parquet duy nhất phục vụ Distribution A/B analysis (~7M rows trên LaSOT full).
 
 ### 6.3 Stage 1 — per-selection log (derivative)
 
@@ -447,7 +474,21 @@ Giống Stage 2 + thêm `setting_name` (samurai_original / sam2_vanilla / samura
 
 ### 6.7 Validation requirements
 
-Sau smoke test (5-10 videos, hoặc toàn bộ small_LaSOT nếu dùng làm smoke dataset):
+**AST tests đã có (reuse từ maskmem profile work):**
+
+- `tests/test_maskmem_profile_logger.py` — schema 17 cột + idempotent close.
+- `tests/test_maskmem_profile_threading.py` — `maskmem_profile_logger` param threading qua call chain.
+- `tests/test_maskmem_profile_cli.py` — `--log_maskmem_profile` flag trong cả `main_inference.py` và `main_inference_preload.py`.
+- `tests/test_plot_maskmem_profile_cli.py` — plot CLI flags + 6 chart functions.
+- `tests/test_plot_maskmem_profile_runtime.py` — fake CSVs → 6 PNG charts.
+
+**AST/runtime tests cần viết mới cho Stage 1 extensions:**
+
+- `tests/test_stage1_logger_extensions.py` — AST: verify B2 fields (`category`, `split`, `gt_bbox`, `predicted_iou`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`) có trong CSV schema; runtime: nullable handling cho frames thiếu GT.
+- `tests/test_stage1_auc_delta.py` — runtime trên 5 LaSOT videos: chạy có/không Stage 1 logger, AUC delta < 1e-4. (Validation mới — spec maskmem profile chưa cover, nhưng critical cho non-invasive guarantee của spec window study.)
+- `tests/test_csv_to_parquet.py` — AST + runtime: consolidate script preserve mọi field, không lose row, schema unchanged.
+
+**Numerical validations (smoke test 5-10 videos hoặc small_LaSOT full):**
 
 1. Số rows = sum video lengths.
 2. Memory bank không bao giờ vượt $K$ slots.
@@ -491,13 +532,28 @@ Lý do chọn approach này (over psutil RSS hay tracemalloc):
 - Overhead thấp.
 - Không phụ thuộc vào Python memory allocator behavior.
 
-**Implementation note cho Claude Code agent:**
+**Reuse từ maskmem profile work:**
 
-Cần inspect SAMURAI codebase để xác định:
-- Tên của attribute/object lưu memory bank features.
-- Cấu trúc nested (dict of dict? list of dict? namedtuple?).
-- Tên các tensor fields (`maskmem_features`, `maskmem_pos_enc`, hoặc tên khác trong codebase thực tế).
-- Dtype và device của tensors (CPU vs CUDA — chỉ count CPU tensors cho RAM metric; GPU tensors thuộc VRAM metric).
+Trong quá trình implement maskmem profile logger, `maskmem_features` storage location đã được locate trong codebase (chỗ `_prepare_memory_conditioned_features` đọc ra để chuyển vào cross-attention). Stage 1 logger reuse cùng access path — tham chiếu `samurai/scripts/maskmem_profile_logger.py` và call chain trong `samurai/sam2/sam2/modeling/sam2_base.py` để hiểu structure traversal đã verified.
+
+**Co-location with maskmem profile CSV:**
+
+`membank_ram_bytes` được sample tại cùng hook point (`_prepare_memory_conditioned_features`) và ghi cùng row với distance fields → 1 CSV per video thay vì 2 file song song. Tránh join key + duplicated identifier overhead.
+
+**Storage components đã verified scale với candidate pool** (count vào `membank_ram_bytes`):
+
+- `maskmem_features` — primary, đã locate.
+- `maskmem_pos_enc` — primary, đã locate.
+
+**Components chưa verified (cần inspect khi implement Stage 1 extension):**
+
+- Image embeddings cache (nếu codebase cache features ở chỗ khác).
+- Conditional frame outputs (frame 0 + auto-promoted cond frames trong bản optimized; bản gốc chỉ frame 0).
+- Intermediate buffers trong attention computation.
+
+Nếu các components này cũng grow theo $|\mathcal{C}_t|$, append byte size vào `membank_ram_bytes` total và document component breakdown trong sidecar metadata file (`{video_id}_stage1_membank_components.json`).
+
+**Dtype/device filtering:** chỉ count CPU tensors cho RAM metric; GPU tensors thuộc VRAM metric (`gpu_vram_bytes`).
 
 ### 7.3 Validation requirements
 
@@ -612,6 +668,17 @@ Mục tiêu: tìm pattern systematic, không phải dump random cases.
 ## 9. Visualization plan
 
 13 plots theo thứ tự sử dụng trong thesis. Tất cả lưu 2 format: PNG (300 DPI) và PDF (vector).
+
+**Reuse từ `samurai/scripts/plot_maskmem_profile.py`:** 4/13 plots overlap với plot script đã implement. Khi implement Stage 1 visualizations, prefer extending existing script over rewriting.
+
+| Spec mới Plot | Reuse từ | Cần extend |
+|---|---|---|
+| Plot 2 (Histogram $\mathcal{D}_B$) | `04_max_distance_cdf.png` (aggregate) | Đổi CDF → histogram + percentile lines, hoặc thêm histogram mode mới |
+| Plot 4 (Per-category boxplot) | `05_per_video_boxplot.png` (aggregate) | Group by category thay vì per-video |
+| Supplement (Distance heatmap per video) | `02_distance_heatmap.png` (per_video) | No change, dùng nguyên |
+| Supplement (Scan-depth analysis) | `03_scan_stats.png`, `06_scan_depth_vs_iou.png` | Phục vụ Section 8.6 (lost selections), không trong main 13 nhưng cited |
+
+Plot 1, 3, 5, 6a–e, 7, 8, 9, 10 là plot mới cần viết riêng cho Stage 1/2/3 analysis.
 
 ### Stage 1 plots
 
