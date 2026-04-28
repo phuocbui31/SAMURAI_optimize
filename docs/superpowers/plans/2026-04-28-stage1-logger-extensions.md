@@ -4,7 +4,7 @@
 
 **Goal:** Extend the existing `MaskmemProfileLogger` (samurai/scripts/) to capture all Stage 1 fields required by `docs/memory_window_size_study_spec.md` Section 6.2 (B2 fields), add memory-bank RAM measurement, and ship a CSV→Parquet consolidation tool — all validated by AST + runtime tests on small_LaSOT.
 
-**Architecture:** Additive extension of an already-working logger. Re-use the same hook point (`_prepare_memory_conditioned_features` in `samurai/sam2/sam2/modeling/sam2_base.py`) and the same logger instance lifecycle in `samurai/scripts/main_inference_preload.py`. No new logger class — keep one CSV per video; add B2 columns to `MaskmemProfileLogger.COLUMNS`. Memory-bank RAM is computed inside `_prepare_memory_conditioned_features` from the same `output_dict` already in scope, then passed to `logger.log(...)`. Predicted bbox / IoU / GT come from the propagation loop and are passed to the predictor through a new `frame_extras` callback that the predictor invokes per yield. CSV→Parquet runs as a standalone post-Stage-1 script.
+**Architecture:** Additive extension of an already-working logger. Re-use the same hook point (`_prepare_memory_conditioned_features` in `samurai/sam2/sam2/modeling/sam2_base.py`) and the same logger instance lifecycle in `samurai/scripts/main_inference_preload.py`. No new logger class — keep one CSV per video; add B2 columns to `MaskmemProfileLogger.COLUMNS`. Memory-bank RAM is computed inside `_prepare_memory_conditioned_features` from the same `output_dict` already in scope, then passed to `logger.log(...)`. Previous-frame predicted bbox / IoU / GT come from the propagation loop and are passed to the predictor through a new `frame_extras` callback that the predictor invokes per yield. `prev_predicted_bbox` / `prev_predicted_iou` lag by 1 frame because the hook fires *before* the predictor yields the current frame's mask — so the caller can only supply the prediction from the *previous* frame at hook time. CSV→Parquet runs as a standalone post-Stage-1 script.
 
 **Tech Stack:** Python 3.10+, PyTorch 2.3.1+ (already a project dep), `pandas` + `pyarrow` for Parquet (add to `requirements.txt` if missing), `psutil` (already a dep — used by `metrics_logger.py`), `csv` / `json` from stdlib. AST tests use `ast` + `pathlib`; runtime tests use `tempfile` + plain assertions. No pytest framework.
 
@@ -90,8 +90,8 @@ EXPECTED_COLUMNS = [
     # B2 — new
     "category",
     "split",
-    "predicted_bbox",
-    "predicted_iou",
+    "prev_predicted_bbox",
+    "prev_predicted_iou",
     "gt_bbox",
     "attributes",
     "inference_time_ms",
@@ -113,8 +113,8 @@ def _full_log(logger, **overrides):
         scan_farthest_checked=4,
         category="airplane",
         split="train_dev",
-        predicted_bbox=[10.0, 20.0, 30.0, 40.0],
-        predicted_iou=0.85,
+        prev_predicted_bbox=[10.0, 20.0, 30.0, 40.0],
+        prev_predicted_iou=0.85,
         gt_bbox=[12.0, 22.0, 28.0, 38.0],
         attributes=["fast_motion", "occlusion"],
         inference_time_ms=62.5,
@@ -140,7 +140,7 @@ def test_runtime_logs_with_b2_fields():
             scan_depth=0,
             n_candidates_rejected=0,
             scan_farthest_checked=-1,
-            predicted_iou=None,  # GT missing on this frame
+            prev_predicted_iou=None,  # GT missing on this frame
             gt_bbox=None,
             attributes=None,
         )
@@ -156,8 +156,8 @@ def test_runtime_logs_with_b2_fields():
         row = dict(zip(EXPECTED_COLUMNS, rows[1]))
         assert row["category"] == "airplane"
         assert row["split"] == "train_dev"
-        assert json.loads(row["predicted_bbox"]) == [10.0, 20.0, 30.0, 40.0]
-        assert abs(float(row["predicted_iou"]) - 0.85) < 1e-6
+        assert json.loads(row["prev_predicted_bbox"]) == [10.0, 20.0, 30.0, 40.0]
+        assert abs(float(row["prev_predicted_iou"]) - 0.85) < 1e-6
         assert json.loads(row["gt_bbox"]) == [12.0, 22.0, 28.0, 38.0]
         assert json.loads(row["attributes"]) == ["fast_motion", "occlusion"]
         assert abs(float(row["inference_time_ms"]) - 62.5) < 1e-6
@@ -166,7 +166,7 @@ def test_runtime_logs_with_b2_fields():
         assert row["gpu_vram_bytes"] == "2500000000"
 
         nullable_row = dict(zip(EXPECTED_COLUMNS, rows[2]))
-        assert nullable_row["predicted_iou"] == ""
+        assert nullable_row["prev_predicted_iou"] == ""
         assert nullable_row["gt_bbox"] == ""
         assert nullable_row["attributes"] == ""
 
@@ -255,8 +255,8 @@ class MaskmemProfileLogger:
         # B2 — Stage 1 extensions
         "category",
         "split",
-        "predicted_bbox",
-        "predicted_iou",
+        "prev_predicted_bbox",
+        "prev_predicted_iou",
         "gt_bbox",
         "attributes",
         "inference_time_ms",
@@ -286,8 +286,8 @@ class MaskmemProfileLogger:
         scan_farthest_checked: int,
         category: str = "",
         split: str = "",
-        predicted_bbox=None,
-        predicted_iou=None,
+        prev_predicted_bbox=None,
+        prev_predicted_iou=None,
         gt_bbox=None,
         attributes=None,
         inference_time_ms=None,
@@ -352,8 +352,8 @@ class MaskmemProfileLogger:
                 # B2
                 category,
                 split,
-                _fmt_optional_json(predicted_bbox),
-                _fmt_optional_float(predicted_iou),
+                _fmt_optional_json(prev_predicted_bbox),
+                _fmt_optional_float(prev_predicted_iou),
                 _fmt_optional_json(gt_bbox),
                 _fmt_optional_json(attributes),
                 _fmt_optional_float(inference_time_ms),
@@ -535,9 +535,9 @@ git commit -m "feat(samurai): introspection helper for memory bank RAM bytes"
 - Modify: `samurai/sam2/sam2/modeling/sam2_base.py` (call `_compute_maskmem_ram_bytes` and pass extras into `logger.log`)
 - Test: `tests/test_maskmem_profile_threading.py` (extend AST checks)
 
-The predictor already threads `maskmem_profile_logger` through. We add **one** new keyword-only parameter `frame_extras` — a callable `(frame_idx) -> dict` returning `{"category", "split", "gt_bbox", "attributes", "predicted_bbox", "predicted_iou"}` for that frame. The hook in `sam2_base.py` calls it once per logged frame and forwards the dict into `logger.log(...)`. The hook also computes `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes` itself (they are not the caller's job).
+The predictor already threads `maskmem_profile_logger` through. We add **one** new keyword-only parameter `frame_extras` — a callable `(frame_idx) -> dict` returning `{"category", "split", "gt_bbox", "attributes", "prev_predicted_bbox", "prev_predicted_iou"}` for that frame. `prev_predicted_*` are lag-1 values: the prediction from the previous frame, since the hook fires before the predictor yields the current frame's mask. The hook in `sam2_base.py` calls it once per logged frame and forwards the dict into `logger.log(...)`. The hook also computes `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes` itself (they are not the caller's job).
 
-**Why a callback and not a `dict[frame_idx]`:** `propagate_in_video` is a generator — by the time it yields frame N, the caller hasn't computed `predicted_bbox` for N yet, but earlier frames are already finalized. The callback returns whatever is currently known; missing keys → caller passes `None`. This avoids buffering issues.
+**Why a callback and not a `dict[frame_idx]`:** `propagate_in_video` is a generator — by the time it yields frame N, the caller hasn't computed the prediction for N yet, but earlier frames are already finalized. The callback returns whatever is currently known (`prev_predicted_*` = prediction from previous frame); missing keys → caller passes `None`. This avoids buffering issues.
 
 - [ ] **Step 1: Extend `tests/test_maskmem_profile_threading.py`**
 
@@ -655,8 +655,8 @@ Find the existing block that calls `maskmem_profile_logger.log(...)` (around lin
                         scan_farthest_checked=scan_farthest_checked,
                         category=extras.get("category", ""),
                         split=extras.get("split", ""),
-                        predicted_bbox=extras.get("predicted_bbox"),
-                        predicted_iou=extras.get("predicted_iou"),
+                        prev_predicted_bbox=extras.get("prev_predicted_bbox"),
+                        prev_predicted_iou=extras.get("prev_predicted_iou"),
                         gt_bbox=extras.get("gt_bbox"),
                         attributes=extras.get("attributes"),
                         inference_time_ms=extras.get("inference_time_ms"),
@@ -693,11 +693,12 @@ git commit -m "feat(samurai): thread frame_extras + auto-collect membank RAM/RSS
 - Modify: `samurai/scripts/main_inference_preload.py`
 - Test: `tests/test_stage1_logger_extensions.py`
 
-The predictor side is generic. Now `main_inference_preload.py` builds a `frame_extras` callable that knows the current video's category, split, GT array, attributes file, and remembers the most recent prediction (so `predicted_bbox` / `predicted_iou` for frame N can be returned the next time the hook fires for some frame N+k — but typically the hook fires *during* the same `propagate_in_video` step before the predicted bbox for the current frame exists, so we return `None` for it and patch it in post-hoc from the logged predictions). To keep this plan deterministic, we adopt:
+The predictor side is generic. Now `main_inference_preload.py` builds a `frame_extras` callable that knows the current video's category, split, GT array, and attributes file, and remembers the most recent prediction as lag-1 values. The hook fires *during* `propagate_in_video` **before** the predictor yields the current frame's mask, so the caller can only supply the prediction from the *previous* frame at hook time. To keep this plan deterministic, we adopt:
 
 - `gt_bbox` and `attributes` come from disk (known at video start).
 - `category` and `split` are constant per video.
-- `predicted_bbox`, `predicted_iou`, `inference_time_ms` start as `None` and the loop updates a `_FrameExtrasState` dict *after* each frame yields. They appear in the row for the **next** call (acceptable — analysis is offline; we document this in code comments).
+- `prev_predicted_bbox`, `prev_predicted_iou`, `inference_time_ms` start as `None` and the loop updates a `_FrameExtrasState` dict *after* each frame yields. They appear in the row for the **next** call (lag-1 semantics — analysis is offline; column names make this explicit).
+- **GT loading uses `np.loadtxt(groundtruth.txt)` directly** instead of `load_lasot_gt()`, because `load_lasot_gt` returns `dict{fid: ((x1,y1,x2,y2), label)}` designed for SAM 2 prompt init — not a flat array suitable for analysis. `np.loadtxt` gives a clean `(N, 4)` array in original `[x, y, w, h]` format.
 
 This is intentional simplicity: avoids restructuring `propagate_in_video` to inject post-hoc data.
 
@@ -726,7 +727,7 @@ from maskmem_profile_logger import MaskmemProfileLogger  # noqa: E402
 
 def make_extras_provider(category, split, gt_arr, attrs_arr):
     """Mimic the closure built by main_inference_preload.py."""
-    state = {"predicted_bbox": None, "predicted_iou": None, "inference_time_ms": None}
+    state = {"prev_predicted_bbox": None, "prev_predicted_iou": None, "inference_time_ms": None}
 
     def provider(frame_idx):
         gt = gt_arr[frame_idx] if frame_idx < len(gt_arr) and gt_arr[frame_idx] is not None else None
@@ -736,8 +737,8 @@ def make_extras_provider(category, split, gt_arr, attrs_arr):
             "split": split,
             "gt_bbox": gt,
             "attributes": attrs,
-            "predicted_bbox": state["predicted_bbox"],
-            "predicted_iou": state["predicted_iou"],
+            "prev_predicted_bbox": state["prev_predicted_bbox"],
+            "prev_predicted_iou": state["prev_predicted_iou"],
             "inference_time_ms": state["inference_time_ms"],
         }
 
@@ -767,8 +768,8 @@ def test_extras_flow_and_nullable():
                 scan_farthest_checked=-1,
                 category=extras["category"],
                 split=extras["split"],
-                predicted_bbox=extras["predicted_bbox"],
-                predicted_iou=extras["predicted_iou"],
+                prev_predicted_bbox=extras["prev_predicted_bbox"],
+                prev_predicted_iou=extras["prev_predicted_iou"],
                 gt_bbox=extras["gt_bbox"],
                 attributes=extras["attributes"],
                 inference_time_ms=extras["inference_time_ms"],
@@ -776,8 +777,8 @@ def test_extras_flow_and_nullable():
                 process_rss_bytes=5678,
                 gpu_vram_bytes=0,
             )
-            state["predicted_bbox"] = [f * 1.0, f * 1.0, 5.0, 5.0]
-            state["predicted_iou"] = 0.5 + 0.1 * f
+            state["prev_predicted_bbox"] = [f * 1.0, f * 1.0, 5.0, 5.0]
+            state["prev_predicted_iou"] = 0.5 + 0.1 * f
             state["inference_time_ms"] = 50.0 + f
 
         logger.close()
@@ -792,9 +793,9 @@ def test_extras_flow_and_nullable():
         # frame 1 has no GT and no attributes
         assert rows[1]["gt_bbox"] == ""
         assert rows[1]["attributes"] == ""
-        # predicted_* lag by 1 frame
-        assert rows[0]["predicted_bbox"] == ""
-        assert json.loads(rows[1]["predicted_bbox"]) == [0.0, 0.0, 5.0, 5.0]
+        # prev_predicted_* lag by 1 frame (hook fires before yield)
+        assert rows[0]["prev_predicted_bbox"] == ""
+        assert json.loads(rows[1]["prev_predicted_bbox"]) == [0.0, 0.0, 5.0, 5.0]
 
 
 def test_main_inference_preload_creates_provider():
@@ -882,7 +883,7 @@ def build_frame_extras(category, split, gt_arr, attrs_arr):
 
     state_dict is mutated by the inference loop after each frame.
     """
-    state = {"predicted_bbox": None, "predicted_iou": None, "inference_time_ms": None}
+    state = {"prev_predicted_bbox": None, "prev_predicted_iou": None, "inference_time_ms": None}
 
     def provider(frame_idx):
         if 0 <= frame_idx < len(gt_arr):
@@ -896,8 +897,8 @@ def build_frame_extras(category, split, gt_arr, attrs_arr):
             "split": split,
             "gt_bbox": gt,
             "attributes": attrs,
-            "predicted_bbox": state["predicted_bbox"],
-            "predicted_iou": state["predicted_iou"],
+            "prev_predicted_bbox": state["prev_predicted_bbox"],
+            "prev_predicted_iou": state["prev_predicted_iou"],
             "inference_time_ms": state["inference_time_ms"],
         }
 
@@ -913,12 +914,9 @@ In `samurai/scripts/main_inference_preload.py`, locate the block that creates `m
         frame_extras_state = None
         if args.log_maskmem_profile:
             seq_dir = osp.join(video_folder, cat_name, video.strip())
-            gt_arr_full = load_lasot_gt(
-                osp.join(seq_dir, "groundtruth.txt")
-            )
-            # load_lasot_gt returns [(bbox, label)]; we want the bbox list aligned
-            # by frame index.
-            gt_bbox_list = [p[0] if p is not None else None for p in gt_arr_full]
+            gt_path = osp.join(seq_dir, "groundtruth.txt")
+            gt_raw = np.loadtxt(gt_path, delimiter=",")  # (N, 4), xywh
+            gt_bbox_list = gt_raw.tolist()  # list of [x, y, w, h]
             attrs_arr = _load_lasot_attributes(seq_dir, num_frames)
             split_name = _read_split_for(video_basename, data_root)
             frame_extras_provider, frame_extras_state = build_frame_extras(
@@ -943,13 +941,13 @@ After the inner loop computes `bbox` for the current frame, update the state:
 
 ```python
                     if frame_extras_state is not None:
-                        frame_extras_state["predicted_bbox"] = list(bbox) if bbox else None
-                        if gt_bbox_list[frame_idx] is not None and bbox:
-                            frame_extras_state["predicted_iou"] = _bbox_iou_xywh(
+                        frame_extras_state["prev_predicted_bbox"] = list(bbox) if bbox else None
+                        if frame_idx < len(gt_bbox_list) and gt_bbox_list[frame_idx] is not None and bbox:
+                            frame_extras_state["prev_predicted_iou"] = _bbox_iou_xywh(
                                 bbox, gt_bbox_list[frame_idx]
                             )
                         else:
-                            frame_extras_state["predicted_iou"] = None
+                            frame_extras_state["prev_predicted_iou"] = None
 ```
 
 Place that block right after the existing `bbox = [x_min, y_min, x_max - x_min, y_max - y_min]` assignment.
@@ -1179,7 +1177,7 @@ def test_runtime_consolidates_two_csvs():
         assert len(df) == 5  # 3 + 2
         assert set(df["video_name"].unique()) == {"airplane-1", "airplane-2"}
         assert "membank_ram_bytes" in df.columns
-        assert "predicted_iou" in df.columns
+        assert "prev_predicted_iou" in df.columns
 
 
 test_ast_has_main_and_argparse()
@@ -1498,13 +1496,13 @@ Open `CLAUDE.md` at repo root. Find the section "### Maskmem Distance Profiling"
 ```markdown
 ### Stage 1 Logger Extensions (`samurai/scripts/maskmem_profile_logger.py`)
 
-`MaskmemProfileLogger` now writes 27 columns: the original 17 (B1, see Maskmem Distance Profiling above) plus 10 Stage 1 extension columns (B2): `category`, `split`, `predicted_bbox`, `predicted_iou`, `gt_bbox`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`.
+`MaskmemProfileLogger` now writes 27 columns: the original 17 (B1, see Maskmem Distance Profiling above) plus 10 Stage 1 extension columns (B2): `category`, `split`, `prev_predicted_bbox`, `prev_predicted_iou`, `gt_bbox`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`.
 
 **B2 fields are populated by `samurai/scripts/main_inference_preload.py` only.** When a logger row is written from `main_inference.py` (async), B2 columns appear empty — only B1 is filled. Plan: `docs/superpowers/plans/2026-04-28-stage1-logger-extensions.md`. Spec reference: `docs/memory_window_size_study_spec.md` Section 6.2.
 
 **Hook computes `membank_ram_bytes` directly:** `_compute_maskmem_ram_bytes(output_dict)` lives in `samurai/sam2/sam2/modeling/sam2_base.py`. Sums CPU bytes of `maskmem_features` + `maskmem_pos_enc` across cond and non-cond entries. CUDA tensors excluded (they belong to `gpu_vram_bytes`).
 
-**`frame_extras` callback:** new keyword-only param threaded through `propagate_in_video` → `_run_single_frame_inference` → `track_step` → `_track_step` → `_prepare_memory_conditioned_features`. Callable `(frame_idx) -> dict` returning `category` / `split` / `gt_bbox` / `attributes` / `predicted_bbox` / `predicted_iou` / `inference_time_ms`. `predicted_*` fields lag by 1 frame because they are computed *after* the predictor yields.
+**`frame_extras` callback:** new keyword-only param threaded through `propagate_in_video` → `_run_single_frame_inference` → `track_step` → `_track_step` → `_prepare_memory_conditioned_features`. Callable `(frame_idx) -> dict` returning `category` / `split` / `gt_bbox` / `attributes` / `prev_predicted_bbox` / `prev_predicted_iou` / `inference_time_ms`. `prev_predicted_*` fields lag by 1 frame because the hook fires before the predictor yields the current frame's mask.
 
 **Sidecar metadata:** `{video_id}_stage1_meta.json` next to each CSV records `samurai_commit_hash`, `samurai_run_timestamp`, `num_frames`, `run_tag`. Avoids repeating the commit hash on every CSV row.
 

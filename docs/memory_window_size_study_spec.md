@@ -423,8 +423,8 @@ Per-frame log của Stage 1 = **maskmem profile schema (đã implement)** + **St
 |---|---|
 | `category` | LaSOT category string |
 | `split` | `train_dev` / `train_val` / `test` |
-| `predicted_bbox` | $\hat{b}_t$ (JSON `[x,y,w,h]`) |
-| `predicted_iou` | IoU vs GT (nullable nếu GT không available) |
+| `prev_predicted_bbox` | $\hat{b}_{t-1}$ (JSON `[x,y,w,h]`); lag-1 — giá trị thuộc frame trước do hook fire trước khi predictor yield frame hiện tại |
+| `prev_predicted_iou` | IoU of $\hat{b}_{t-1}$ vs GT$_{t-1}$ (nullable nếu GT không available); lag-1 cùng lý do |
 | `gt_bbox` | $b_t$ (JSON, nullable) |
 | `attributes` | Attributes active tại frame (JSON list) |
 | `inference_time_ms` | Per-frame timing |
@@ -484,7 +484,7 @@ Giống Stage 2 + thêm `setting_name` (samurai_original / sam2_vanilla / samura
 
 **AST/runtime tests cần viết mới cho Stage 1 extensions:**
 
-- `tests/test_stage1_logger_extensions.py` — AST: verify B2 fields (`category`, `split`, `gt_bbox`, `predicted_iou`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`) có trong CSV schema; runtime: nullable handling cho frames thiếu GT.
+- `tests/test_stage1_logger_extensions.py` — AST: verify B2 fields (`category`, `split`, `gt_bbox`, `prev_predicted_bbox`, `prev_predicted_iou`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`) có trong CSV schema; runtime: nullable handling cho frames thiếu GT.
 - `tests/test_stage1_auc_delta.py` — runtime trên 5 LaSOT videos: chạy có/không Stage 1 logger, AUC delta < 1e-4. (Validation mới — spec maskmem profile chưa cover, nhưng critical cho non-invasive guarantee của spec window study.)
 - `tests/test_csv_to_parquet.py` — AST + runtime: consolidate script preserve mọi field, không lose row, schema unchanged.
 
