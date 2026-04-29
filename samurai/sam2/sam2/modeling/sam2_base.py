@@ -661,6 +661,7 @@ class SAM2Base(torch.nn.Module):
         num_frames,
         track_in_reverse=False,  # tracking in reverse time order (for demo usage)
         maskmem_profile_logger=None,
+        frame_extras=None,
     ):
         """Fuse the current frame's visual feature map with previous memory."""
         B = current_vision_feats[-1].size(1)  # batch size on this frame
@@ -745,6 +746,21 @@ class SAM2Base(torch.nn.Module):
                         maskmem_obj_scores.append(obj_score)
                         maskmem_kf_scores.append(kf_score)
 
+                    extras = frame_extras(frame_idx) if frame_extras is not None else {}
+                    membank_ram_bytes = _compute_maskmem_ram_bytes(output_dict)
+
+                    try:
+                        import psutil
+
+                        process_rss_bytes = psutil.Process().memory_info().rss
+                    except Exception:
+                        process_rss_bytes = None
+
+                    if torch.cuda.is_available():
+                        gpu_vram_bytes = torch.cuda.max_memory_allocated()
+                    else:
+                        gpu_vram_bytes = None
+
                     maskmem_profile_logger.log(
                         frame_idx=frame_idx,
                         maskmem_frame_indices=selected_maskmem_indices,
@@ -754,6 +770,16 @@ class SAM2Base(torch.nn.Module):
                         scan_depth=scan_depth,
                         n_candidates_rejected=n_candidates_rejected,
                         scan_farthest_checked=scan_farthest_checked,
+                        category=extras.get("category", ""),
+                        split=extras.get("split", ""),
+                        prev_predicted_bbox=extras.get("prev_predicted_bbox"),
+                        prev_predicted_iou=extras.get("prev_predicted_iou"),
+                        gt_bbox=extras.get("gt_bbox"),
+                        attributes=extras.get("attributes"),
+                        inference_time_ms=extras.get("inference_time_ms"),
+                        membank_ram_bytes=membank_ram_bytes,
+                        process_rss_bytes=process_rss_bytes,
+                        gpu_vram_bytes=gpu_vram_bytes,
                     )
             else:
                 for t_pos in range(1, self.num_maskmem):
@@ -957,6 +983,7 @@ class SAM2Base(torch.nn.Module):
         track_in_reverse,
         prev_sam_mask_logits,
         maskmem_profile_logger=None,
+        frame_extras=None,
     ):
         current_out = {"point_inputs": point_inputs, "mask_inputs": mask_inputs}
         # High-resolution feature maps for the SAM head, reshape (HW)BC => BCHW
@@ -987,6 +1014,7 @@ class SAM2Base(torch.nn.Module):
                 num_frames=num_frames,
                 track_in_reverse=track_in_reverse,
                 maskmem_profile_logger=maskmem_profile_logger,
+                frame_extras=frame_extras,
             )
             # apply SAM-style segmentation head
             # here we might feed previously predicted low-res SAM mask logits into the SAM mask decoder,
@@ -1052,6 +1080,7 @@ class SAM2Base(torch.nn.Module):
         # The previously predicted SAM mask logits (which can be fed together with new clicks in demo).
         prev_sam_mask_logits=None,
         maskmem_profile_logger=None,
+        frame_extras=None,
     ):
         current_out, sam_outputs, _, _ = self._track_step(
             frame_idx,
@@ -1066,6 +1095,7 @@ class SAM2Base(torch.nn.Module):
             track_in_reverse,
             prev_sam_mask_logits,
             maskmem_profile_logger=maskmem_profile_logger,
+            frame_extras=frame_extras,
         )
 
         (
