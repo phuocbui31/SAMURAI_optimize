@@ -570,7 +570,7 @@ Spec & plan: `docs/superpowers/specs/2026-04-26-maskmem-distance-profile-design.
 
 `MaskmemProfileLogger` now writes 27 columns: the original 17 (B1, see Maskmem Distance Profiling above) plus 10 Stage 1 extension columns (B2): `category`, `split`, `prev_predicted_bbox`, `prev_predicted_iou`, `gt_bbox`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`.
 
-**B2 fields are populated by `samurai/scripts/main_inference_preload.py` only.** When a logger row is written from `main_inference.py` (async), B2 columns appear empty — only B1 is filled. Plan: `docs/superpowers/plans/2026-04-28-stage1-logger-extensions.md`. Spec reference: `docs/memory_window_size_study_spec.md` Section 6.2.
+**Provider-sourced B2 fields are populated by `samurai/scripts/main_inference_preload.py` only.** When a logger row is written from `main_inference.py` (async), the 7 provider-sourced B2 columns (`category`, `split`, `prev_predicted_bbox`, `prev_predicted_iou`, `gt_bbox`, `attributes`, `inference_time_ms`) appear empty; the 3 hook-measured columns (`membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`) are still populated since they're computed inside `sam2_base.py` independently of `frame_extras`. The async path also does not write the `_stage1_meta.json` sidecar. Plan: `docs/superpowers/plans/2026-04-28-stage1-logger-extensions.md`. Spec reference: `docs/memory_window_size_study_spec.md` Section 6.2.
 
 **Hook computes `membank_ram_bytes` directly:** `_compute_maskmem_ram_bytes(output_dict)` lives in `samurai/sam2/sam2/modeling/sam2_base.py`. Sums CPU bytes of `maskmem_features` + `maskmem_pos_enc` across cond and non-cond entries. CUDA tensors excluded (they belong to `gpu_vram_bytes`).
 
