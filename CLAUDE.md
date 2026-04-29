@@ -566,6 +566,29 @@ AST smoke tests:
 
 Spec & plan: `docs/superpowers/specs/2026-04-26-maskmem-distance-profile-design.md`, `docs/superpowers/plans/2026-04-26-maskmem-distance-profile-multi-agent.md`.
 
+### Stage 1 Logger Extensions (`samurai/scripts/maskmem_profile_logger.py`)
+
+`MaskmemProfileLogger` now writes 27 columns: the original 17 (B1, see Maskmem Distance Profiling above) plus 10 Stage 1 extension columns (B2): `category`, `split`, `prev_predicted_bbox`, `prev_predicted_iou`, `gt_bbox`, `attributes`, `inference_time_ms`, `membank_ram_bytes`, `process_rss_bytes`, `gpu_vram_bytes`.
+
+**B2 fields are populated by `samurai/scripts/main_inference_preload.py` only.** When a logger row is written from `main_inference.py` (async), B2 columns appear empty — only B1 is filled. Plan: `docs/superpowers/plans/2026-04-28-stage1-logger-extensions.md`. Spec reference: `docs/memory_window_size_study_spec.md` Section 6.2.
+
+**Hook computes `membank_ram_bytes` directly:** `_compute_maskmem_ram_bytes(output_dict)` lives in `samurai/sam2/sam2/modeling/sam2_base.py`. Sums CPU bytes of `maskmem_features` + `maskmem_pos_enc` across cond and non-cond entries. CUDA tensors excluded (they belong to `gpu_vram_bytes`).
+
+**`frame_extras` callback:** new keyword param threaded through `propagate_in_video` → `_run_single_frame_inference` → `track_step` → `_track_step` → `_prepare_memory_conditioned_features`. Callable `(frame_idx) -> dict` returning `category` / `split` / `gt_bbox` / `attributes` / `prev_predicted_bbox` / `prev_predicted_iou` / `inference_time_ms`. `prev_predicted_*` fields lag by 1 frame because the hook fires before the predictor yields the current frame's mask.
+
+**Sidecar metadata:** `{video_id}_stage1_meta.json` next to each CSV records `samurai_commit_hash`, `samurai_run_timestamp`, `num_frames`, `run_tag`. Avoids repeating the commit hash on every CSV row.
+
+**CSV → Parquet:** `samurai/scripts/csv_to_parquet.py --csv_dir <dir> --out <path.parquet>` consolidates all `*_maskmem_profile.csv` in `<dir>` into one Parquet file. Reads with `dtype=str, keep_default_na=False` so JSON columns and numeric columns both round-trip without coercion surprises — analysis code parses on demand.
+
+AST + runtime tests:
+- `tests/test_maskmem_profile_logger.py` — full 27-column schema (B1 + B2)
+- `tests/test_membank_ram_measurement.py` — introspection helper
+- `tests/test_maskmem_profile_threading.py` — `frame_extras` param threaded + 2026-04-26 regression guards
+- `tests/test_stage1_logger_extensions.py` — provider closure + nullable handling
+- `tests/test_stage1_sidecar_metadata.py` — sidecar JSON written
+- `tests/test_csv_to_parquet.py` — schema-preserving consolidation
+- `tests/test_stage1_auc_delta.py` — AUC delta < 1e-4 (skipped without GPU/data)
+
 ## FAQ & Troubleshooting
 
 **Q: Do I need to train SAMURAI?**
