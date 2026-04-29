@@ -304,7 +304,7 @@ try:
         if args.log_maskmem_profile:
             seq_dir = osp.join(video_folder, cat_name, video.strip())
             gt_path = osp.join(seq_dir, "groundtruth.txt")
-            gt_raw = np.loadtxt(gt_path, delimiter=",")  # (N, 4), xywh
+            gt_raw = np.loadtxt(gt_path, delimiter=",", ndmin=2)  # (N, 4), xywh
             gt_bbox_list = gt_raw.tolist()  # list of [x, y, w, h]
             attrs_arr = _load_lasot_attributes(seq_dir, num_frames)
             split_name = _read_split_for(video_basename, data_root)
