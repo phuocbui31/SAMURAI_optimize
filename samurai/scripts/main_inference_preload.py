@@ -29,6 +29,101 @@ def load_lasot_gt(gt_path):
     return prompts
 
 
+import json as _stage1_json
+
+
+def _load_lasot_attributes(seq_dir, num_frames):
+    """Load per-frame attribute flags for LaSOT.
+
+    Returns a list of length num_frames; each element is either a list of
+    attribute names active on that frame, or None if no attribute file
+    exists. Attribute files (`full_occlusion.txt`, `out_of_view.txt`)
+    contain one 0/1 per frame.
+    """
+    attribute_files = [
+        ("full_occlusion", "full_occlusion.txt"),
+        ("out_of_view", "out_of_view.txt"),
+    ]
+    per_frame = [[] for _ in range(num_frames)]
+    found_any = False
+    for name, fname in attribute_files:
+        path = osp.join(seq_dir, fname)
+        if not osp.exists(path):
+            continue
+        found_any = True
+        with open(path) as f:
+            raw = f.read().strip().replace(",", " ").split()
+        flags = [int(x) for x in raw][:num_frames]
+        for i, flag in enumerate(flags):
+            if flag:
+                per_frame[i].append(name)
+    if not found_any:
+        return [None] * num_frames
+    return per_frame
+
+
+def _read_split_for(video_basename, data_root):
+    """Return 'train_dev', 'train_val', or 'test' for the given video.
+
+    Reads optional `splits/splits_v1.json` (LaSOT) or
+    `splits/splits_small_v1.json` (small_LaSOT) at the data root. If no
+    split file exists, returns "" (logger writes empty string).
+    """
+    for fname in ("splits/splits_v1.json", "splits/splits_small_v1.json"):
+        path = osp.join(data_root, fname)
+        if not osp.exists(path):
+            continue
+        with open(path) as f:
+            split_map = _stage1_json.load(f)
+        for split_name, videos in split_map.items():
+            if video_basename in videos:
+                return split_name
+    return ""
+
+
+def build_frame_extras(category, split, gt_arr, attrs_arr):
+    """Return (provider_callable, state_dict) for one video.
+
+    state_dict is mutated by the inference loop after each frame.
+    """
+    state = {"prev_predicted_bbox": None, "prev_predicted_iou": None, "inference_time_ms": None}
+
+    def provider(frame_idx):
+        if 0 <= frame_idx < len(gt_arr):
+            gt = gt_arr[frame_idx]
+            gt = list(gt) if gt is not None else None
+        else:
+            gt = None
+        attrs = attrs_arr[frame_idx] if 0 <= frame_idx < len(attrs_arr) else None
+        return {
+            "category": category,
+            "split": split,
+            "gt_bbox": gt,
+            "attributes": attrs,
+            "prev_predicted_bbox": state["prev_predicted_bbox"],
+            "prev_predicted_iou": state["prev_predicted_iou"],
+            "inference_time_ms": state["inference_time_ms"],
+        }
+
+    return provider, state
+
+
+def _bbox_iou_xywh(a, b):
+    """IoU between two [x, y, w, h] boxes. Returns 0.0 if either is degenerate."""
+    if not a or not b or a[2] <= 0 or a[3] <= 0 or b[2] <= 0 or b[3] <= 0:
+        return 0.0
+    ax1, ay1, aw, ah = a
+    bx1, by1, bw, bh = b
+    ax2, ay2 = ax1 + aw, ay1 + ah
+    bx2, by2 = bx1 + bw, by1 + bh
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+    inter = iw * ih
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
 parser = argparse.ArgumentParser(
     description=(
         "SAMURAI baseline inference — biến thể preload đầy đủ:\n"
@@ -203,6 +298,23 @@ try:
                 num_frames_total=num_frames,
             )
 
+        frame_extras_provider = None
+        frame_extras_state = None
+        gt_bbox_list = []
+        if args.log_maskmem_profile:
+            seq_dir = osp.join(video_folder, cat_name, video.strip())
+            gt_path = osp.join(seq_dir, "groundtruth.txt")
+            gt_raw = np.loadtxt(gt_path, delimiter=",")  # (N, 4), xywh
+            gt_bbox_list = gt_raw.tolist()  # list of [x, y, w, h]
+            attrs_arr = _load_lasot_attributes(seq_dir, num_frames)
+            split_name = _read_split_for(video_basename, data_root)
+            frame_extras_provider, frame_extras_state = build_frame_extras(
+                category=cat_name,
+                split=split_name,
+                gt_arr=gt_bbox_list,
+                attrs_arr=attrs_arr,
+            )
+
         try:
             if save_to_video:
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -238,6 +350,7 @@ try:
                 for frame_idx, object_ids, masks in predictor.propagate_in_video(
                     state,
                     maskmem_profile_logger=maskmem_profile_logger,
+                    frame_extras=frame_extras_provider,
                 ):
                     if metrics_logger is not None:
                         metrics_logger.log(frame_idx)
@@ -259,6 +372,14 @@ try:
                             bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
                         bbox_to_vis[obj_id] = bbox
                         mask_to_vis[obj_id] = mask
+                        if frame_extras_state is not None:
+                            frame_extras_state["prev_predicted_bbox"] = list(bbox) if bbox else None
+                            if frame_idx < len(gt_bbox_list) and gt_bbox_list[frame_idx] is not None and bbox:
+                                frame_extras_state["prev_predicted_iou"] = _bbox_iou_xywh(
+                                    bbox, gt_bbox_list[frame_idx]
+                                )
+                            else:
+                                frame_extras_state["prev_predicted_iou"] = None
 
                     if save_to_video:
                         # Lấy từ preload cache thay vì cv2.imread từ disk.
