@@ -33,6 +33,29 @@ def _profile_score_to_float(score):
         return None
 
 
+def _compute_maskmem_ram_bytes(output_dict):
+    """Sum CPU byte size of cached maskmem tensors across cond + non-cond frames.
+
+    Returns 0 if all entries lack the relevant fields. CUDA tensors are
+    intentionally excluded — they belong to the gpu_vram_bytes metric.
+    """
+    total = 0
+    for bucket in ("cond_frame_outputs", "non_cond_frame_outputs"):
+        entries = output_dict.get(bucket, {})
+        for entry in entries.values():
+            feats = entry.get("maskmem_features") if isinstance(entry, dict) else None
+            if feats is not None and feats.device.type == "cpu":
+                total += feats.element_size() * feats.numel()
+            pos = entry.get("maskmem_pos_enc") if isinstance(entry, dict) else None
+            if pos is None:
+                continue
+            tensors = pos if isinstance(pos, (list, tuple)) else [pos]
+            for t in tensors:
+                if t is not None and t.device.type == "cpu":
+                    total += t.element_size() * t.numel()
+    return total
+
+
 class SAM2Base(torch.nn.Module):
     def __init__(
         self,
