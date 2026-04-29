@@ -1,4 +1,4 @@
-"""Line-buffered CSV logger for SAMURAI maskmem distance profiling."""
+"""Line-buffered CSV logger for SAMURAI maskmem distance profiling (Stage 1)."""
 
 from __future__ import annotations
 
@@ -9,10 +9,23 @@ import os.path as osp
 from typing import TextIO
 
 
+def _fmt_optional_float(x):
+    return "" if x is None else f"{x:.6f}"
+
+
+def _fmt_optional_int(x):
+    return "" if x is None else str(int(x))
+
+
+def _fmt_optional_json(x):
+    return "" if x is None else json.dumps(x)
+
+
 class MaskmemProfileLogger:
-    """Append one maskmem profile row per tracked frame."""
+    """Append one Stage 1 row per tracked frame."""
 
     COLUMNS = [
+        # B1 — existing
         "frame_idx",
         "num_frames_total",
         "video_name",
@@ -30,6 +43,17 @@ class MaskmemProfileLogger:
         "scan_farthest_checked",
         "min_iou_of_selected",
         "mean_iou_of_selected",
+        # B2 — Stage 1 extensions
+        "category",
+        "split",
+        "prev_predicted_bbox",
+        "prev_predicted_iou",
+        "gt_bbox",
+        "attributes",
+        "inference_time_ms",
+        "membank_ram_bytes",
+        "process_rss_bytes",
+        "gpu_vram_bytes",
     ]
 
     def __init__(self, video_name: str, output_dir: str, num_frames_total: int):
@@ -51,8 +75,21 @@ class MaskmemProfileLogger:
         scan_depth: int,
         n_candidates_rejected: int,
         scan_farthest_checked: int,
+        category: str = "",
+        split: str = "",
+        prev_predicted_bbox=None,
+        prev_predicted_iou=None,
+        gt_bbox=None,
+        attributes=None,
+        inference_time_ms=None,
+        membank_ram_bytes=None,
+        process_rss_bytes=None,
+        gpu_vram_bytes=None,
     ):
-        """Write one CSV row and derive distance/quality summary fields."""
+        """Write one CSV row and derive distance/quality summary fields.
+
+        B2 fields default to None/"" so callers can opt in incrementally.
+        """
         if self._fp is None:
             return
 
@@ -85,6 +122,7 @@ class MaskmemProfileLogger:
 
         self._writer.writerow(
             [
+                # B1
                 frame_idx,
                 self.num_frames_total,
                 self.video_name,
@@ -102,6 +140,17 @@ class MaskmemProfileLogger:
                 scan_farthest_checked,
                 min_iou,
                 mean_iou,
+                # B2
+                category,
+                split,
+                _fmt_optional_json(prev_predicted_bbox),
+                _fmt_optional_float(prev_predicted_iou),
+                _fmt_optional_json(gt_bbox),
+                _fmt_optional_json(attributes),
+                _fmt_optional_float(inference_time_ms),
+                _fmt_optional_int(membank_ram_bytes),
+                _fmt_optional_int(process_rss_bytes),
+                _fmt_optional_int(gpu_vram_bytes),
             ]
         )
 
