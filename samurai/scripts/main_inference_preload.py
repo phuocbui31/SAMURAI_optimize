@@ -6,6 +6,7 @@ import os
 import os.path as osp
 import pdb
 import sys
+import time
 import torch
 
 sys.path.insert(0, osp.join(osp.dirname(osp.dirname(__file__)), "sam2"))
@@ -385,11 +386,17 @@ try:
                     state, box=bbox, frame_idx=0, obj_id=0
                 )
 
-                for frame_idx, object_ids, masks in predictor.propagate_in_video(
+                gen = predictor.propagate_in_video(
                     state,
                     maskmem_profile_logger=maskmem_profile_logger,
                     frame_extras=frame_extras_provider,
-                ):
+                )
+                t_iter_start = time.perf_counter()
+                while True:
+                    try:
+                        frame_idx, object_ids, masks = next(gen)
+                    except StopIteration:
+                        break
                     if metrics_logger is not None:
                         metrics_logger.log(frame_idx)
                     mask_to_vis = {}
@@ -448,6 +455,11 @@ try:
                         out.write(img)
 
                     predictions.append(bbox_to_vis)
+
+                    now = time.perf_counter()
+                    if frame_extras_state is not None:
+                        frame_extras_state["inference_time_ms"] = (now - t_iter_start) * 1000.0
+                    t_iter_start = now
         finally:
             if metrics_logger is not None:
                 metrics_logger.close()
