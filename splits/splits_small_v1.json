@@ -1,0 +1,79 @@
+{
+  "policy": {
+    "stratify_by": "category",
+    "train_dev_per_category": 12,
+    "train_val_per_category": 4,
+    "videos_per_category": 16
+  },
+  "seed": 42,
+  "source": "/home/phuocbui/Khoa_luan_tot_nghiep_sam2/samurai_optimized/data/small_LaSOT/training_set.txt",
+  "splits": {
+    "electricfan": {
+      "train_dev": [
+        "electricfan-11",
+        "electricfan-12",
+        "electricfan-13",
+        "electricfan-14",
+        "electricfan-15",
+        "electricfan-16",
+        "electricfan-17",
+        "electricfan-19",
+        "electricfan-2",
+        "electricfan-3",
+        "electricfan-4",
+        "electricfan-5"
+      ],
+      "train_val": [
+        "electricfan-6",
+        "electricfan-7",
+        "electricfan-8",
+        "electricfan-9"
+      ]
+    },
+    "gecko": {
+      "train_dev": [
+        "gecko-10",
+        "gecko-11",
+        "gecko-12",
+        "gecko-13",
+        "gecko-14",
+        "gecko-15",
+        "gecko-17",
+        "gecko-18",
+        "gecko-2",
+        "gecko-20",
+        "gecko-3",
+        "gecko-4"
+      ],
+      "train_val": [
+        "gecko-6",
+        "gecko-7",
+        "gecko-8",
+        "gecko-9"
+      ]
+    },
+    "mouse": {
+      "train_dev": [
+        "mouse-10",
+        "mouse-11",
+        "mouse-12",
+        "mouse-13",
+        "mouse-14",
+        "mouse-15",
+        "mouse-16",
+        "mouse-18",
+        "mouse-19",
+        "mouse-2",
+        "mouse-20",
+        "mouse-3"
+      ],
+      "train_val": [
+        "mouse-4",
+        "mouse-5",
+        "mouse-6",
+        "mouse-7"
+      ]
+    }
+  },
+  "version": "v1"
+}

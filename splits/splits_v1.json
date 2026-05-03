@@ -1,0 +1,993 @@
+{
+  "policy": {
+    "stratify_by": "category",
+    "train_dev_per_category": 6,
+    "train_val_per_category": 2,
+    "videos_per_category": 8
+  },
+  "seed": 42,
+  "source": "/home/phuocbui/Khoa_luan_tot_nghiep_sam2/samurai_optimized/data/LaSOT/training_set.txt",
+  "splits": {
+    "airplane": {
+      "train_dev": [
+        "airplane-10",
+        "airplane-11",
+        "airplane-17",
+        "airplane-19",
+        "airplane-3",
+        "airplane-4"
+      ],
+      "train_val": [
+        "airplane-5",
+        "airplane-6"
+      ]
+    },
+    "basketball": {
+      "train_dev": [
+        "basketball-12",
+        "basketball-13",
+        "basketball-16",
+        "basketball-18",
+        "basketball-20",
+        "basketball-4"
+      ],
+      "train_val": [
+        "basketball-5",
+        "basketball-8"
+      ]
+    },
+    "bear": {
+      "train_dev": [
+        "bear-1",
+        "bear-10",
+        "bear-11",
+        "bear-13",
+        "bear-15",
+        "bear-3"
+      ],
+      "train_val": [
+        "bear-5",
+        "bear-7"
+      ]
+    },
+    "bicycle": {
+      "train_dev": [
+        "bicycle-11",
+        "bicycle-13",
+        "bicycle-14",
+        "bicycle-17",
+        "bicycle-19",
+        "bicycle-20"
+      ],
+      "train_val": [
+        "bicycle-3",
+        "bicycle-5"
+      ]
+    },
+    "bird": {
+      "train_dev": [
+        "bird-13",
+        "bird-14",
+        "bird-18",
+        "bird-19",
+        "bird-5",
+        "bird-7"
+      ],
+      "train_val": [
+        "bird-8",
+        "bird-9"
+      ]
+    },
+    "boat": {
+      "train_dev": [
+        "boat-11",
+        "boat-13",
+        "boat-14",
+        "boat-16",
+        "boat-19",
+        "boat-7"
+      ],
+      "train_val": [
+        "boat-8",
+        "boat-9"
+      ]
+    },
+    "book": {
+      "train_dev": [
+        "book-14",
+        "book-15",
+        "book-2",
+        "book-20",
+        "book-4",
+        "book-5"
+      ],
+      "train_val": [
+        "book-7",
+        "book-8"
+      ]
+    },
+    "bottle": {
+      "train_dev": [
+        "bottle-15",
+        "bottle-17",
+        "bottle-2",
+        "bottle-20",
+        "bottle-3",
+        "bottle-4"
+      ],
+      "train_val": [
+        "bottle-5",
+        "bottle-6"
+      ]
+    },
+    "bus": {
+      "train_dev": [
+        "bus-10",
+        "bus-12",
+        "bus-14",
+        "bus-15",
+        "bus-16",
+        "bus-4"
+      ],
+      "train_val": [
+        "bus-6",
+        "bus-7"
+      ]
+    },
+    "car": {
+      "train_dev": [
+        "car-1",
+        "car-11",
+        "car-12",
+        "car-13",
+        "car-14",
+        "car-15"
+      ],
+      "train_val": [
+        "car-5",
+        "car-8"
+      ]
+    },
+    "cat": {
+      "train_dev": [
+        "cat-11",
+        "cat-12",
+        "cat-13",
+        "cat-15",
+        "cat-17",
+        "cat-19"
+      ],
+      "train_val": [
+        "cat-2",
+        "cat-4"
+      ]
+    },
+    "cattle": {
+      "train_dev": [
+        "cattle-1",
+        "cattle-10",
+        "cattle-14",
+        "cattle-15",
+        "cattle-18",
+        "cattle-5"
+      ],
+      "train_val": [
+        "cattle-6",
+        "cattle-8"
+      ]
+    },
+    "chameleon": {
+      "train_dev": [
+        "chameleon-10",
+        "chameleon-12",
+        "chameleon-15",
+        "chameleon-16",
+        "chameleon-18",
+        "chameleon-4"
+      ],
+      "train_val": [
+        "chameleon-7",
+        "chameleon-9"
+      ]
+    },
+    "coin": {
+      "train_dev": [
+        "coin-1",
+        "coin-10",
+        "coin-12",
+        "coin-13",
+        "coin-14",
+        "coin-16"
+      ],
+      "train_val": [
+        "coin-4",
+        "coin-5"
+      ]
+    },
+    "crab": {
+      "train_dev": [
+        "crab-10",
+        "crab-11",
+        "crab-13",
+        "crab-15",
+        "crab-17",
+        "crab-19"
+      ],
+      "train_val": [
+        "crab-2",
+        "crab-9"
+      ]
+    },
+    "crocodile": {
+      "train_dev": [
+        "crocodile-1",
+        "crocodile-12",
+        "crocodile-17",
+        "crocodile-19",
+        "crocodile-5",
+        "crocodile-6"
+      ],
+      "train_val": [
+        "crocodile-7",
+        "crocodile-8"
+      ]
+    },
+    "cup": {
+      "train_dev": [
+        "cup-11",
+        "cup-15",
+        "cup-16",
+        "cup-18",
+        "cup-19",
+        "cup-20"
+      ],
+      "train_val": [
+        "cup-3",
+        "cup-6"
+      ]
+    },
+    "deer": {
+      "train_dev": [
+        "deer-11",
+        "deer-12",
+        "deer-15",
+        "deer-17",
+        "deer-18",
+        "deer-20"
+      ],
+      "train_val": [
+        "deer-3",
+        "deer-7"
+      ]
+    },
+    "dog": {
+      "train_dev": [
+        "dog-10",
+        "dog-11",
+        "dog-12",
+        "dog-16",
+        "dog-17",
+        "dog-18"
+      ],
+      "train_val": [
+        "dog-4",
+        "dog-5"
+      ]
+    },
+    "drone": {
+      "train_dev": [
+        "drone-10",
+        "drone-14",
+        "drone-17",
+        "drone-19",
+        "drone-4",
+        "drone-5"
+      ],
+      "train_val": [
+        "drone-6",
+        "drone-9"
+      ]
+    },
+    "electricfan": {
+      "train_dev": [
+        "electricfan-11",
+        "electricfan-12",
+        "electricfan-14",
+        "electricfan-15",
+        "electricfan-19",
+        "electricfan-2"
+      ],
+      "train_val": [
+        "electricfan-4",
+        "electricfan-9"
+      ]
+    },
+    "elephant": {
+      "train_dev": [
+        "elephant-11",
+        "elephant-15",
+        "elephant-17",
+        "elephant-2",
+        "elephant-3",
+        "elephant-4"
+      ],
+      "train_val": [
+        "elephant-5",
+        "elephant-9"
+      ]
+    },
+    "flag": {
+      "train_dev": [
+        "flag-12",
+        "flag-13",
+        "flag-14",
+        "flag-18",
+        "flag-19",
+        "flag-20"
+      ],
+      "train_val": [
+        "flag-7",
+        "flag-8"
+      ]
+    },
+    "fox": {
+      "train_dev": [
+        "fox-1",
+        "fox-11",
+        "fox-13",
+        "fox-16",
+        "fox-18",
+        "fox-19"
+      ],
+      "train_val": [
+        "fox-4",
+        "fox-6"
+      ]
+    },
+    "frog": {
+      "train_dev": [
+        "frog-10",
+        "frog-11",
+        "frog-14",
+        "frog-16",
+        "frog-17",
+        "frog-19"
+      ],
+      "train_val": [
+        "frog-6",
+        "frog-7"
+      ]
+    },
+    "gametarget": {
+      "train_dev": [
+        "gametarget-10",
+        "gametarget-14",
+        "gametarget-15",
+        "gametarget-18",
+        "gametarget-19",
+        "gametarget-6"
+      ],
+      "train_val": [
+        "gametarget-8",
+        "gametarget-9"
+      ]
+    },
+    "gecko": {
+      "train_dev": [
+        "gecko-10",
+        "gecko-11",
+        "gecko-13",
+        "gecko-14",
+        "gecko-17",
+        "gecko-18"
+      ],
+      "train_val": [
+        "gecko-20",
+        "gecko-6"
+      ]
+    },
+    "giraffe": {
+      "train_dev": [
+        "giraffe-1",
+        "giraffe-11",
+        "giraffe-12",
+        "giraffe-14",
+        "giraffe-16",
+        "giraffe-3"
+      ],
+      "train_val": [
+        "giraffe-5",
+        "giraffe-9"
+      ]
+    },
+    "goldfish": {
+      "train_dev": [
+        "goldfish-12",
+        "goldfish-15",
+        "goldfish-16",
+        "goldfish-18",
+        "goldfish-2",
+        "goldfish-20"
+      ],
+      "train_val": [
+        "goldfish-4",
+        "goldfish-9"
+      ]
+    },
+    "gorilla": {
+      "train_dev": [
+        "gorilla-1",
+        "gorilla-10",
+        "gorilla-11",
+        "gorilla-14",
+        "gorilla-15",
+        "gorilla-2"
+      ],
+      "train_val": [
+        "gorilla-3",
+        "gorilla-5"
+      ]
+    },
+    "guitar": {
+      "train_dev": [
+        "guitar-1",
+        "guitar-12",
+        "guitar-15",
+        "guitar-18",
+        "guitar-19",
+        "guitar-2"
+      ],
+      "train_val": [
+        "guitar-20",
+        "guitar-6"
+      ]
+    },
+    "hand": {
+      "train_dev": [
+        "hand-10",
+        "hand-11",
+        "hand-15",
+        "hand-18",
+        "hand-20",
+        "hand-5"
+      ],
+      "train_val": [
+        "hand-7",
+        "hand-8"
+      ]
+    },
+    "hat": {
+      "train_dev": [
+        "hat-12",
+        "hat-13",
+        "hat-15",
+        "hat-16",
+        "hat-19",
+        "hat-20"
+      ],
+      "train_val": [
+        "hat-3",
+        "hat-9"
+      ]
+    },
+    "helmet": {
+      "train_dev": [
+        "helmet-10",
+        "helmet-14",
+        "helmet-15",
+        "helmet-16",
+        "helmet-20",
+        "helmet-4"
+      ],
+      "train_val": [
+        "helmet-7",
+        "helmet-9"
+      ]
+    },
+    "hippo": {
+      "train_dev": [
+        "hippo-11",
+        "hippo-17",
+        "hippo-18",
+        "hippo-19",
+        "hippo-3",
+        "hippo-4"
+      ],
+      "train_val": [
+        "hippo-5",
+        "hippo-8"
+      ]
+    },
+    "horse": {
+      "train_dev": [
+        "horse-11",
+        "horse-13",
+        "horse-2",
+        "horse-20",
+        "horse-3",
+        "horse-5"
+      ],
+      "train_val": [
+        "horse-8",
+        "horse-9"
+      ]
+    },
+    "kangaroo": {
+      "train_dev": [
+        "kangaroo-1",
+        "kangaroo-12",
+        "kangaroo-17",
+        "kangaroo-20",
+        "kangaroo-3",
+        "kangaroo-4"
+      ],
+      "train_val": [
+        "kangaroo-7",
+        "kangaroo-8"
+      ]
+    },
+    "kite": {
+      "train_dev": [
+        "kite-1",
+        "kite-14",
+        "kite-18",
+        "kite-2",
+        "kite-3",
+        "kite-5"
+      ],
+      "train_val": [
+        "kite-7",
+        "kite-9"
+      ]
+    },
+    "leopard": {
+      "train_dev": [
+        "leopard-10",
+        "leopard-13",
+        "leopard-14",
+        "leopard-15",
+        "leopard-19",
+        "leopard-5"
+      ],
+      "train_val": [
+        "leopard-6",
+        "leopard-9"
+      ]
+    },
+    "licenseplate": {
+      "train_dev": [
+        "licenseplate-10",
+        "licenseplate-14",
+        "licenseplate-18",
+        "licenseplate-2",
+        "licenseplate-3",
+        "licenseplate-4"
+      ],
+      "train_val": [
+        "licenseplate-5",
+        "licenseplate-7"
+      ]
+    },
+    "lion": {
+      "train_dev": [
+        "lion-11",
+        "lion-15",
+        "lion-16",
+        "lion-18",
+        "lion-19",
+        "lion-3"
+      ],
+      "train_val": [
+        "lion-7",
+        "lion-9"
+      ]
+    },
+    "lizard": {
+      "train_dev": [
+        "lizard-10",
+        "lizard-11",
+        "lizard-12",
+        "lizard-16",
+        "lizard-17",
+        "lizard-18"
+      ],
+      "train_val": [
+        "lizard-20",
+        "lizard-9"
+      ]
+    },
+    "microphone": {
+      "train_dev": [
+        "microphone-11",
+        "microphone-12",
+        "microphone-13",
+        "microphone-17",
+        "microphone-20",
+        "microphone-4"
+      ],
+      "train_val": [
+        "microphone-8",
+        "microphone-9"
+      ]
+    },
+    "monkey": {
+      "train_dev": [
+        "monkey-11",
+        "monkey-12",
+        "monkey-13",
+        "monkey-14",
+        "monkey-15",
+        "monkey-19"
+      ],
+      "train_val": [
+        "monkey-20",
+        "monkey-5"
+      ]
+    },
+    "motorcycle": {
+      "train_dev": [
+        "motorcycle-10",
+        "motorcycle-11",
+        "motorcycle-12",
+        "motorcycle-17",
+        "motorcycle-2",
+        "motorcycle-5"
+      ],
+      "train_val": [
+        "motorcycle-6",
+        "motorcycle-7"
+      ]
+    },
+    "mouse": {
+      "train_dev": [
+        "mouse-10",
+        "mouse-12",
+        "mouse-15",
+        "mouse-16",
+        "mouse-20",
+        "mouse-3"
+      ],
+      "train_val": [
+        "mouse-4",
+        "mouse-7"
+      ]
+    },
+    "person": {
+      "train_dev": [
+        "person-13",
+        "person-15",
+        "person-19",
+        "person-2",
+        "person-20",
+        "person-3"
+      ],
+      "train_val": [
+        "person-4",
+        "person-8"
+      ]
+    },
+    "pig": {
+      "train_dev": [
+        "pig-1",
+        "pig-16",
+        "pig-17",
+        "pig-19",
+        "pig-3",
+        "pig-5"
+      ],
+      "train_val": [
+        "pig-6",
+        "pig-9"
+      ]
+    },
+    "pool": {
+      "train_dev": [
+        "pool-10",
+        "pool-2",
+        "pool-20",
+        "pool-4",
+        "pool-5",
+        "pool-6"
+      ],
+      "train_val": [
+        "pool-8",
+        "pool-9"
+      ]
+    },
+    "rabbit": {
+      "train_dev": [
+        "rabbit-14",
+        "rabbit-18",
+        "rabbit-2",
+        "rabbit-20",
+        "rabbit-4",
+        "rabbit-5"
+      ],
+      "train_val": [
+        "rabbit-7",
+        "rabbit-8"
+      ]
+    },
+    "racing": {
+      "train_dev": [
+        "racing-1",
+        "racing-11",
+        "racing-18",
+        "racing-19",
+        "racing-2",
+        "racing-5"
+      ],
+      "train_val": [
+        "racing-8",
+        "racing-9"
+      ]
+    },
+    "robot": {
+      "train_dev": [
+        "robot-10",
+        "robot-11",
+        "robot-14",
+        "robot-15",
+        "robot-16",
+        "robot-17"
+      ],
+      "train_val": [
+        "robot-2",
+        "robot-7"
+      ]
+    },
+    "rubicCube": {
+      "train_dev": [
+        "rubicCube-10",
+        "rubicCube-11",
+        "rubicCube-17",
+        "rubicCube-18",
+        "rubicCube-2",
+        "rubicCube-3"
+      ],
+      "train_val": [
+        "rubicCube-4",
+        "rubicCube-5"
+      ]
+    },
+    "sepia": {
+      "train_dev": [
+        "sepia-1",
+        "sepia-11",
+        "sepia-12",
+        "sepia-14",
+        "sepia-15",
+        "sepia-19"
+      ],
+      "train_val": [
+        "sepia-2",
+        "sepia-4"
+      ]
+    },
+    "shark": {
+      "train_dev": [
+        "shark-1",
+        "shark-10",
+        "shark-12",
+        "shark-16",
+        "shark-17",
+        "shark-19"
+      ],
+      "train_val": [
+        "shark-20",
+        "shark-8"
+      ]
+    },
+    "sheep": {
+      "train_dev": [
+        "sheep-1",
+        "sheep-12",
+        "sheep-15",
+        "sheep-16",
+        "sheep-18",
+        "sheep-19"
+      ],
+      "train_val": [
+        "sheep-20",
+        "sheep-6"
+      ]
+    },
+    "skateboard": {
+      "train_dev": [
+        "skateboard-1",
+        "skateboard-11",
+        "skateboard-15",
+        "skateboard-20",
+        "skateboard-5",
+        "skateboard-6"
+      ],
+      "train_val": [
+        "skateboard-7",
+        "skateboard-9"
+      ]
+    },
+    "spider": {
+      "train_dev": [
+        "spider-1",
+        "spider-10",
+        "spider-11",
+        "spider-19",
+        "spider-2",
+        "spider-4"
+      ],
+      "train_val": [
+        "spider-7",
+        "spider-8"
+      ]
+    },
+    "squirrel": {
+      "train_dev": [
+        "squirrel-10",
+        "squirrel-12",
+        "squirrel-15",
+        "squirrel-18",
+        "squirrel-2",
+        "squirrel-20"
+      ],
+      "train_val": [
+        "squirrel-4",
+        "squirrel-9"
+      ]
+    },
+    "surfboard": {
+      "train_dev": [
+        "surfboard-1",
+        "surfboard-10",
+        "surfboard-11",
+        "surfboard-13",
+        "surfboard-16",
+        "surfboard-18"
+      ],
+      "train_val": [
+        "surfboard-2",
+        "surfboard-20"
+      ]
+    },
+    "swing": {
+      "train_dev": [
+        "swing-1",
+        "swing-12",
+        "swing-16",
+        "swing-18",
+        "swing-3",
+        "swing-4"
+      ],
+      "train_val": [
+        "swing-7",
+        "swing-9"
+      ]
+    },
+    "tank": {
+      "train_dev": [
+        "tank-12",
+        "tank-13",
+        "tank-15",
+        "tank-18",
+        "tank-19",
+        "tank-4"
+      ],
+      "train_val": [
+        "tank-5",
+        "tank-7"
+      ]
+    },
+    "tiger": {
+      "train_dev": [
+        "tiger-11",
+        "tiger-14",
+        "tiger-15",
+        "tiger-16",
+        "tiger-17",
+        "tiger-7"
+      ],
+      "train_val": [
+        "tiger-8",
+        "tiger-9"
+      ]
+    },
+    "train": {
+      "train_dev": [
+        "train-12",
+        "train-14",
+        "train-15",
+        "train-2",
+        "train-3",
+        "train-4"
+      ],
+      "train_val": [
+        "train-6",
+        "train-9"
+      ]
+    },
+    "truck": {
+      "train_dev": [
+        "truck-10",
+        "truck-11",
+        "truck-13",
+        "truck-14",
+        "truck-18",
+        "truck-19"
+      ],
+      "train_val": [
+        "truck-4",
+        "truck-8"
+      ]
+    },
+    "turtle": {
+      "train_dev": [
+        "turtle-1",
+        "turtle-11",
+        "turtle-13",
+        "turtle-15",
+        "turtle-17",
+        "turtle-18"
+      ],
+      "train_val": [
+        "turtle-2",
+        "turtle-7"
+      ]
+    },
+    "umbrella": {
+      "train_dev": [
+        "umbrella-11",
+        "umbrella-12",
+        "umbrella-14",
+        "umbrella-15",
+        "umbrella-16",
+        "umbrella-18"
+      ],
+      "train_val": [
+        "umbrella-4",
+        "umbrella-8"
+      ]
+    },
+    "volleyball": {
+      "train_dev": [
+        "volleyball-14",
+        "volleyball-16",
+        "volleyball-17",
+        "volleyball-20",
+        "volleyball-3",
+        "volleyball-5"
+      ],
+      "train_val": [
+        "volleyball-8",
+        "volleyball-9"
+      ]
+    },
+    "yoyo": {
+      "train_dev": [
+        "yoyo-1",
+        "yoyo-10",
+        "yoyo-13",
+        "yoyo-20",
+        "yoyo-3",
+        "yoyo-4"
+      ],
+      "train_val": [
+        "yoyo-5",
+        "yoyo-6"
+      ]
+    },
+    "zebra": {
+      "train_dev": [
+        "zebra-1",
+        "zebra-18",
+        "zebra-19",
+        "zebra-3",
+        "zebra-4",
+        "zebra-6"
+      ],
+      "train_val": [
+        "zebra-7",
+        "zebra-9"
+      ]
+    }
+  },
+  "version": "v1"
+}
