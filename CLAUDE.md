@@ -591,6 +591,53 @@ AST + runtime tests:
 - `tests/test_csv_to_parquet.py` — schema-preserving consolidation
 - `tests/test_stage1_auc_delta.py` — AUC delta < 1e-4 (skipped without GPU/data)
 
+### Stage 1 Incremental LaSOT Runs (`scripts/stage1_run_batch.py`, `scripts/stage1_aggregate.py`)
+
+Workflow để chạy Stage 1 trên LaSOT khi không thể tải toàn bộ ~100 GB cùng lúc — tải dữ liệu từng category (~3-4 GB/cat) và tích lũy thống kê qua nhiều đợt.
+
+**Splits đã lock** (`splits/splits_v1.json` — 70 cats × 8 videos = 560, 6/2 split, seed=42):
+
+```bash
+# Build (chỉ chạy 1 lần, đã commit)
+python splits/build_splits.py \
+    --training_set data/LaSOT/training_set.txt \
+    --out splits/splits_v1.json \
+    --seed 42 --videos_per_category 8 --train_dev_per_category 6
+
+# Validate file existing chưa bị tay sửa
+python splits/build_splits.py \
+    --training_set data/LaSOT/training_set.txt \
+    --seed 42 --videos_per_category 8 --train_dev_per_category 6 \
+    --validate splits/splits_v1.json
+```
+
+**Workflow incremental (lặp qua nhiều đợt download):**
+
+```bash
+# 1) Tải 1-2 categories từ HuggingFace LaSOT mirror vào data/LaSOT/<cat>/
+# 2) Chạy batch — auto-detect categories trên disk
+python scripts/stage1_run_batch.py \
+    --data_root data/LaSOT \
+    --splits splits/splits_v1.json \
+    --metrics_dir metrics/stage1_lasot \
+    --run_tag default
+
+# 3) Aggregate (tích lũy mọi categories đã chạy đến giờ)
+python scripts/stage1_aggregate.py \
+    --csv_dir metrics/stage1_lasot/default \
+    --splits splits/splits_v1.json \
+    --out_dir analysis/stage1/default
+
+# 4) Lặp lại 1)-3) với category kế tiếp; aggregator tự cumulative.
+```
+
+**Resume + crash safety:** batch script cleanup partial CSVs (CSV không có sidecar = run crash) và skip videos đã có CSV+sidecar đầy đủ. Re-run cùng `--run_tag` tiếp tục từ điểm dừng.
+
+**Default chỉ train_dev** (đúng spec §5.1). Train_val giữ lại cho Stage 2; train_dev/train_val không lặp video (kiểm tra qua `tests/test_splits_disjoint.py`).
+
+Spec: `docs/superpowers/specs/2026-05-02-stage1-incremental-lasot-design.md`.
+Plan: `docs/superpowers/plans/2026-05-03-stage1-incremental-lasot.md`.
+
 ## FAQ & Troubleshooting
 
 **Q: Do I need to train SAMURAI?**
