@@ -172,3 +172,10 @@ report/
 .worktrees/
 
 .claude/worktrees/
+
+# Stage 1 incremental runs
+metrics/
+analysis/stage1/*/stage1_consolidated.parquet
+data/LaSOT/*/
+!data/LaSOT/training_set.txt
+!data/LaSOT/testing_set_small.txt
