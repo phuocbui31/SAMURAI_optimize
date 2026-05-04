@@ -6,7 +6,7 @@
     "videos_per_category": 8
   },
   "seed": 42,
-  "source": "/home/phuocbui/Khoa_luan_tot_nghiep_sam2/samurai_optimized/data/LaSOT/training_set.txt",
+  "source": "data/LaSOT/training_set.txt",
   "splits": {
     "airplane": {
       "train_dev": [

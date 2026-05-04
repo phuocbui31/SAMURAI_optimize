@@ -2,6 +2,8 @@ cd samurai/sam2
 
 uv venv .venv
 
+source .venv/bin/activate
+
 uv pip install --upgrade pip setuptools wheel
 
 uv pip install -e .
@@ -28,3 +30,5 @@ uv run samurai/scripts/main_inference_preload.py \
     --metrics_dir metrics/stage1_small_lasot \
     --run_tag preload_test \
     --evaluate
+
+uv pip install huggingface_hub
