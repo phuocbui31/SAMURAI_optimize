@@ -87,7 +87,11 @@ def build_frame_extras(category, split, gt_arr, attrs_arr):
 
     state_dict is mutated by the inference loop after each frame.
     """
-    state = {"prev_predicted_bbox": None, "prev_predicted_iou": None, "inference_time_ms": None}
+    state = {
+        "prev_predicted_bbox": None,
+        "prev_predicted_iou": None,
+        "inference_time_ms": None,
+    }
 
     def provider(frame_idx):
         if 0 <= frame_idx < len(gt_arr):
@@ -266,7 +270,7 @@ if args.log_metrics or args.log_maskmem_profile:
         else osp.join("metrics", f"{exp_name}_{model_name}")
     )
 
-save_to_video = True
+save_to_video = False
 if save_to_video:
     vis_folder = f"visualization/{exp_name}/{model_name}"
     os.makedirs(vis_folder, exist_ok=True)
@@ -402,9 +406,9 @@ try:
                     mask_to_vis = {}
                     bbox_to_vis = {}
 
-                    assert len(masks) == 1 and len(object_ids) == 1, (
-                        "Only one object is supported right now"
-                    )
+                    assert (
+                        len(masks) == 1 and len(object_ids) == 1
+                    ), "Only one object is supported right now"
                     for obj_id, mask in zip(object_ids, masks):
                         mask = mask[0].cpu().numpy()
                         mask = mask > 0.0
@@ -418,10 +422,16 @@ try:
                         bbox_to_vis[obj_id] = bbox
                         mask_to_vis[obj_id] = mask
                         if frame_extras_state is not None:
-                            frame_extras_state["prev_predicted_bbox"] = list(bbox) if bbox else None
-                            if frame_idx < len(gt_bbox_list) and gt_bbox_list[frame_idx] is not None and bbox:
-                                frame_extras_state["prev_predicted_iou"] = _bbox_iou_xywh(
-                                    bbox, gt_bbox_list[frame_idx]
+                            frame_extras_state["prev_predicted_bbox"] = (
+                                list(bbox) if bbox else None
+                            )
+                            if (
+                                frame_idx < len(gt_bbox_list)
+                                and gt_bbox_list[frame_idx] is not None
+                                and bbox
+                            ):
+                                frame_extras_state["prev_predicted_iou"] = (
+                                    _bbox_iou_xywh(bbox, gt_bbox_list[frame_idx])
                                 )
                             else:
                                 frame_extras_state["prev_predicted_iou"] = None
@@ -435,7 +445,9 @@ try:
 
                         for obj_id in mask_to_vis.keys():
                             mask_img = np.zeros((height, width, 3), np.uint8)
-                            mask_img[mask_to_vis[obj_id]] = color[(obj_id + 1) % len(color)]
+                            mask_img[mask_to_vis[obj_id]] = color[
+                                (obj_id + 1) % len(color)
+                            ]
                             img = cv2.addWeighted(img, 1, mask_img, 0.75, 0)
 
                         for obj_id in bbox_to_vis.keys():
@@ -458,7 +470,9 @@ try:
 
                     now = time.perf_counter()
                     if frame_extras_state is not None:
-                        frame_extras_state["inference_time_ms"] = (now - t_iter_start) * 1000.0
+                        frame_extras_state["inference_time_ms"] = (
+                            now - t_iter_start
+                        ) * 1000.0
                     t_iter_start = now
         finally:
             if metrics_logger is not None:

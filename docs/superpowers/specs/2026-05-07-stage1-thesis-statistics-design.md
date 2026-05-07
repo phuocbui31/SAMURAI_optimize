@@ -54,8 +54,8 @@ analysis/stage1/default/distribution_summary.json
               ↓
 analysis/stage1_thesis_analysis.ipynb   ← FILE CHÍNH cần build
               ↓
-   ├─ figures/stage1/*.png + *.pdf  (12-15 figures)
-   ├─ tables/stage1/*.csv + *.md + *.tex  (6-7 bảng)
+   ├─ figures/stage1/*.png + *.pdf  (10 figures × 2 formats)
+   ├─ tables/stage1/*.csv + *.md + *.tex  (6 bảng × 3 formats)
    ├─ analysis/stage1/candidate_window_sizes.json  (input cho Stage 2)
    └─ analysis/stage1_findings.md   (prose summary cho thesis)
 ```

@@ -16,6 +16,8 @@ set -u
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+echo "$REPO_ROOT"
+
 SPLITS="splits/splits_v1.json"
 DATA_ROOT="data/LaSOT"
 METRICS_DIR="metrics/stage1_lasot"
@@ -42,16 +44,8 @@ echo
 # Categories grouped with their videos to rerun.
 # Order: alphabetical by category. Each category is downloaded and deleted exactly once.
 CATEGORIES=(
-    "airplane:airplane-10 airplane-11 airplane-4"
-    "basketball:basketball-20"
-    "bottle:bottle-2"
-    "bus:bus-12 bus-14 bus-4"
-    "cat:cat-15"
-    "crab:crab-13"
-    "deer:deer-15"
-    "elephant:elephant-3"
-    "flag:flag-13"
-    "fox:fox-11"
+    "pool:pool-4 pool-5 pool-6 pool-20"
+    "swing:swing-3 swing-4 swing-12 swing-16 swing-18"
 )
 
 OK_CATS=()

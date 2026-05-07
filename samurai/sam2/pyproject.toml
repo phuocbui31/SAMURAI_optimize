@@ -7,6 +7,8 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "fastparquet>=2026.3.0",
+    "matplotlib>=3.10.9",
     "numpy>=2.4.4",
     "pandas>=3.0.2",
     "psutil>=7.2.2",
