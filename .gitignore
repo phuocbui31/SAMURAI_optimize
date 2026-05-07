@@ -181,4 +181,9 @@ data/LaSOT/*/
 !data/LaSOT/testing_set_small.txt
 
 metrics/
-analysis/
+analysis/*
+!analysis/stage1_thesis_analysis.ipynb
+!analysis/stage1_findings.md
+!analysis/stage1/
+analysis/stage1/*
+!analysis/stage1/candidate_window_sizes.json
