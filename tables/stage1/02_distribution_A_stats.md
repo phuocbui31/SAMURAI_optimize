@@ -1,0 +1,15 @@
+**Table 2.1: Distribution A (per-selection distance) statistics**
+
+| Statistic            |         Value |
+|:---------------------|--------------:|
+| N (total selections) |   6.36966e+06 |
+| Mean                 |   5.8         |
+| Std                  |  26.6         |
+| Min                  |   1           |
+| P25                  |   2           |
+| P50                  |   4           |
+| P75                  |   5           |
+| P90                  |   6           |
+| P95                  |   6           |
+| P99                  |  54           |
+| P100                 | 913           |
