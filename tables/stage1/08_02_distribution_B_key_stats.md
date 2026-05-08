@@ -1,0 +1,10 @@
+**Table 8.2: Distribution B Key Statistics (drives window size selection)**
+
+| Percentile   |   Distance (frames) | Frame Coverage   | Interpretation                |
+|:-------------|--------------------:|:-----------------|:------------------------------|
+| P50          |                   6 | 50%              | Median frame needs ≤N history |
+| P75          |                   6 | 75%              | 3/4 frames covered            |
+| P90          |                   6 | 90%              | High coverage                 |
+| P95          |                   8 | 95%              | Very high coverage            |
+| P99          |                  76 | 99%              | Near-complete coverage        |
+| P100 (max)   |                 913 | 100%             | Longest observed distance     |

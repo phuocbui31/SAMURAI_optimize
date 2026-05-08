@@ -1,0 +1,6 @@
+category,P99,P100,mean,interpretation
+train,6.0,28.0,6.0,Stable appearance / minimal motion
+turtle,335.0,563.0,13.0,Stable appearance / minimal motion
+umbrella,9.0,53.0,6.1,Stable appearance / minimal motion
+volleyball,73.0,108.0,11.5,Stable appearance / minimal motion
+zebra,12.0,41.0,6.2,Stable appearance / minimal motion

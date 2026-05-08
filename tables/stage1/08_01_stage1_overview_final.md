@@ -1,0 +1,9 @@
+**Table 8.1: Stage 1 Overview (for thesis)**
+
+| Metric                    | Value             |
+|:--------------------------|:------------------|
+| Videos analyzed           | 415 / 420 (98.8%) |
+| Categories covered        | 70 / 70 (100%)    |
+| Total frames              | 1,063,012         |
+| Total selections (Dist A) | 6,369,659         |
+| Mean frames/video         | 2563              |

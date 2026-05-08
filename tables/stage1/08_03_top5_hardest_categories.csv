@@ -1,0 +1,6 @@
+category,P99,P100,mean,interpretation
+yoyo,33.0,59.0,10.2,High motion / frequent occlusion
+airplane,29.0,170.0,6.9,High motion / frequent occlusion
+bear,6.0,19.0,6.0,High motion / frequent occlusion
+bicycle,50.0,163.0,7.3,High motion / frequent occlusion
+bird,21.0,58.0,6.4,High motion / frequent occlusion
