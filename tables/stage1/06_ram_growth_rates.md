@@ -1,0 +1,8 @@
+**Table 6.1: Memory bank RAM growth rates (5 sample videos)**
+
+| video_id       |   length |   slope_MB_per_frame |   R_squared |   peak_RAM_MB |   final_RAM_MB |
+|:---------------|---------:|---------------------:|------------:|--------------:|---------------:|
+| hippo-11       |     1325 |               0.5243 |           1 |         694.7 |          694.7 |
+| train-3        |     1617 |               0.5243 |           1 |         847.8 |          847.8 |
+| hat-19         |     2540 |               0.5243 |           1 |        1331.7 |         1331.7 |
+| licenseplate-3 |     3670 |               0.5243 |           1 |        1924.1 |         1924.1 |
