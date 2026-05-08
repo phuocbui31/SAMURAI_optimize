@@ -3,37 +3,37 @@
     6,
     7,
     8,
-    100,
-    175
+    75,
+    150
   ],
   "rationale": "Percentile-based from Distribution B (per-frame max distance)",
   "coverage_at_candidates": {
     "6": {
-      "frame": 0.9402,
+      "frame": 0.9401,
       "selection": 0.9639
     },
     "7": {
-      "frame": 0.9473,
+      "frame": 0.9472,
       "selection": 0.9672
     },
     "8": {
-      "frame": 0.9522,
-      "selection": 0.9696
+      "frame": 0.9523,
+      "selection": 0.9698
     },
-    "100": {
-      "frame": 0.992,
-      "selection": 0.9937
+    "75": {
+      "frame": 0.9901,
+      "selection": 0.9922
     },
-    "175": {
-      "frame": 0.9954,
-      "selection": 0.9963
+    "150": {
+      "frame": 0.9947,
+      "selection": 0.9958
     }
   },
   "generated_from": {
-    "n_videos": 415,
+    "n_videos": 418,
     "n_categories": 70,
-    "n_frames": 1063012,
-    "n_selections": 6369659
+    "n_frames": 1078477,
+    "n_selections": 6462389
   },
   "date": "2026-05-08",
   "spec_reference": "docs/superpowers/specs/2026-05-07-stage1-thesis-statistics-design.md"

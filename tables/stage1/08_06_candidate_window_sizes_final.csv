@@ -1,6 +1,6 @@
 N,Frame Coverage,Selection Coverage,Rationale
-6,0.9402,0.9639,High coverage
-7,0.9473,0.9672,Lower bound
-8,0.9522,0.9696,Median case
-100,0.992,0.9937,High coverage
-175,0.9954,0.9963,High coverage
+6,0.9401,0.9639,High coverage
+7,0.9472,0.9672,Lower bound
+8,0.9523,0.9698,Median case
+75,0.9901,0.9922,High coverage
+150,0.9947,0.9958,High coverage

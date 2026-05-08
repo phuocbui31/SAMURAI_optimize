@@ -3,16 +3,16 @@
 ## RQ1: Natural Memory Selection Behavior
 
 ### Distribution Overview
-- **Videos analyzed:** 415 / 420 (98.8%)
+- **Videos analyzed:** 418 / 420 (99.5%)
 - **Categories:** 70 / 70 (100%)
-- **Total frames:** 1,063,012
-- **Total selections:** 6,369,659
+- **Total frames:** 1,078,477
+- **Total selections:** 6,462,389
 
 ### Key Statistics (Distribution B — per-frame max distance)
 - **Median (P50):** 6 frames — 50% frames need ≤6 history
 - **P90:** 6 frames — 90% coverage
 - **P95:** 8 frames — 95% coverage
-- **P99:** 76 frames — 99% coverage
+- **P99:** 74 frames — 99% coverage
 - **Max observed:** 913 frames
 
 ### Per-Category Insights
@@ -20,12 +20,12 @@
   - High motion, frequent occlusion → require longer memory windows
 - **Bottom-5 easiest:** train, turtle, umbrella, volleyball, zebra
   - Stable appearance, minimal motion → saturate quickly
-- **Outliers:** 24 categories with P99 > 2× median (21)
+- **Outliers:** 25 categories with P99 > 2× median (20)
 
 ### Per-Attribute Effects
-- **full_occlusion:** Large effect (Cohen's d=0.985, p=0.000e+00)
+- **full_occlusion:** Large effect (Cohen's d=0.98, p=0.000e+00)
   - Frames with full_occlusion active look back 3 frames farther on average
-- **out_of_view:** Large effect (Cohen's d=1.392, p=0.000e+00)
+- **out_of_view:** Large effect (Cohen's d=1.394, p=0.000e+00)
   - Frames with out_of_view active look back 12 frames farther on average
 
 ### Memory Bank RAM
@@ -35,13 +35,13 @@
 
 ## Candidate Window Sizes for Stage 2
 
-Selected 5 values: **[6, 7, 8, 100, 175]**
+Selected 5 values: **[6, 7, 8, 75, 150]**
 
 **Rationale:**
 - Percentile-based from Distribution B (per-frame max distance)
 - Round-to-nice for cleaner reporting
 - Coverage range: 94.0% → 99.5%
-- Expected saturation around N=100 (P95 coverage)
+- Expected saturation around N=75 (P95 coverage)
 
 ## Next Steps
 
