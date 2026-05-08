@@ -1,0 +1,40 @@
+{
+  "candidate_window_sizes": [
+    6,
+    7,
+    8,
+    100,
+    175
+  ],
+  "rationale": "Percentile-based from Distribution B (per-frame max distance)",
+  "coverage_at_candidates": {
+    "6": {
+      "frame": 0.9402,
+      "selection": 0.9639
+    },
+    "7": {
+      "frame": 0.9473,
+      "selection": 0.9672
+    },
+    "8": {
+      "frame": 0.9522,
+      "selection": 0.9696
+    },
+    "100": {
+      "frame": 0.992,
+      "selection": 0.9937
+    },
+    "175": {
+      "frame": 0.9954,
+      "selection": 0.9963
+    }
+  },
+  "generated_from": {
+    "n_videos": 415,
+    "n_categories": 70,
+    "n_frames": 1063012,
+    "n_selections": 6369659
+  },
+  "date": "2026-05-08",
+  "spec_reference": "docs/superpowers/specs/2026-05-07-stage1-thesis-statistics-design.md"
+}
