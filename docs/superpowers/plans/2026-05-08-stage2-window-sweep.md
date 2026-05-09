@@ -14,22 +14,40 @@
 
 ## Implementation Overview
 
-**3 main components:**
-1. **Batch Runner** (`stage2_run_batch.py`) — Orchestrate inference runs
-2. **Aggregator** (`stage2_aggregate.py`) — Consolidate results into per-video summary
-3. **N* Selector** (`stage2_select_n_star.py`) — Statistical analysis to choose optimal window size
+**4 main components:**
+1. **Main inference output routing** (`main_inference.py --pred_dir`) — Save predictions per window size
+2. **Batch Runner** (`stage2_run_batch.py`) — Orchestrate inference runs
+3. **Aggregator** (`stage2_aggregate.py`) — Recompute quality metrics from predictions + GT and consolidate summaries
+4. **N* Selector** (`stage2_select_n_star.py`) — Statistical analysis to choose optimal window size
 
 **Pattern:** Adapt from Stage 1 (`stage1_run_batch.py`, `stage1_aggregate.py`) but invoke optimized `main_inference.py` with window size flags instead of SAMURAI gốc with maskmem profiling.
 
 ---
 
-## Task 1: Batch Runner Implementation
+## Task 0: Prediction Output Routing
 
-**Goal:** Create `scripts/stage2_run_batch.py` that orchestrates main_inference.py runs across window sizes and videos.
+**Goal:** Prevent Stage 2 window-size runs from overwriting each other's prediction files.
 
 **Files:**
-- Create: `scripts/stage2_run_batch.py`
-- Create: `tests/test_stage2_run_batch.py`
+- Update: `scripts/main_inference.py`
+- Update: `tests/test_stage2_run_batch.py` or add a focused AST test
+
+**Implementation steps:**
+
+- [ ] Add optional CLI flag `--pred_dir` to `scripts/main_inference.py`
+- [ ] Preserve existing behavior when omitted: `results/samurai/samurai_<model_name>/`
+- [ ] When provided, write predictions to `{pred_dir}/{video}.txt`
+- [ ] Keep prediction format unchanged: one `x,y,w,h` row per frame
+- [ ] Add AST test confirming `--pred_dir` exists and is used for `pred_folder`
+- [ ] Commit: `git commit -m "feat(stage2): route predictions by window size"`
+
+## Task 1: Batch Runner Implementation
+
+**Goal:** Update/create `scripts/stage2_run_batch.py` so it orchestrates `main_inference.py` runs across window sizes and videos, while saving metrics and predictions in window-scoped paths.
+
+**Files:**
+- Update/create: `scripts/stage2_run_batch.py`
+- Update/create: `tests/test_stage2_run_batch.py`
 - Reference: `scripts/stage1_run_batch.py` (adapt pattern)
 
 **Key functions to implement:**
@@ -48,7 +66,7 @@ def detect_on_disk(entries, data_root):
     """Partition into (on_disk, missing) based on img/ dir existence"""
     
 def is_video_complete(metrics_dir, window_size, video_id):
-    """Check if {metrics_dir}/{window_size}/{video}_metrics.csv exists"""
+    """Check if metrics CSV and window-scoped prediction txt both exist"""
     
 def build_pending_list(on_disk, metrics_dir, window_sizes):
     """Return [(window_size, video_id)] for incomplete runs"""
@@ -64,17 +82,23 @@ def run_pending(pending, data_root, metrics_dir):
     --data_root={data_root}
     --testing_set={temp_file_with_single_video}
     --metrics_dir={metrics_dir}/{window_size}
+    --run_tag=stage2
+    --pred_dir=results/stage2/{window_size}
     """
 ```
 
 **Implementation steps:**
 
-- [ ] Copy `stage1_run_batch.py` to `stage2_run_batch.py`
+- [ ] Adapt the existing Stage 2 runner or copy the Stage 1 runner if starting fresh
 - [ ] Modify `load_splits()` to filter `train_val` only (not `train_dev`)
 - [ ] Change `PRELOAD_SCRIPT` to `INFERENCE_SCRIPT = "scripts/main_inference.py"`
-- [ ] Modify `is_video_complete()` to check `{window_size}/{video}_metrics.csv` (not `_maskmem_profile.csv`)
+- [ ] Modify `is_video_complete()` to check both:
+      `metrics_dir/{window_size}/stage2/{video}.csv` and
+      `results/stage2/{window_size}/{video}.txt`
+- [ ] Modify partial cleanup to re-run pairs missing either metrics CSV or prediction txt
 - [ ] Add `build_pending_list()` to generate (window_size, video) pairs
 - [ ] Modify `run_pending()` to invoke main_inference.py with Stage 2 flags (see above)
+- [ ] Pass `--pred_dir results/stage2/{window_size}` to prevent prediction overwrite
 - [ ] Remove `--log_maskmem_profile` flag (not needed for Stage 2)
 - [ ] Update docstring and help text
 - [ ] Write AST tests in `tests/test_stage2_run_batch.py` (verify CLI flags, function existence)
@@ -83,7 +107,7 @@ def run_pending(pending, data_root, metrics_dir):
 
 ## Task 2: Aggregator Implementation
 
-**Goal:** Create `scripts/stage2_aggregate.py` that consolidates intermediate CSVs into per-video summary with 27 fields.
+**Goal:** Create `scripts/stage2_aggregate.py` that consolidates intermediate CSVs into the Stage 2 per-video summary schema.
 
 **Files:**
 - Create: `scripts/stage2_aggregate.py`
@@ -93,10 +117,10 @@ def run_pending(pending, data_root, metrics_dir):
 
 ```python
 def parse_args():
-    """CLI: --metrics_dir, --splits, --out_dir"""
+    """CLI: --metrics_dir, --data_root, --pred_root, --splits, --out_dir"""
     
 def discover_csvs(metrics_dir):
-    """Scan metrics_dir/{window_size}/ for *_metrics.csv files
+    """Scan metrics_dir/{window_size}/stage2/ for *.csv files
     Return [(window_size, video_id, csv_path)]"""
     
 def load_metrics_csv(csv_path):
@@ -108,18 +132,18 @@ def compute_fps_metrics(df):
 def compute_memory_metrics(df):
     """Extract: membank_ram_peak_mb, membank_ram_mean_mb, membank_ram_final_mb, gpu_vram_peak_mb"""
     
-def load_predictions_and_gt(data_root, category, video_id):
-    """Load predicted bboxes from output/ and GT from groundtruth.txt"""
+def load_predictions_and_gt(pred_root, data_root, window_size, category, video_id):
+    """Load pred_root/{window_size}/{video_id}.txt and LaSOT GT/visibility"""
     
 def compute_per_frame_iou(pred_xywh, gt_xywh):
     """Compute IoU for each frame"""
     
 def compute_quality_metrics(pred_xywh, gt_xywh, target_visible):
-    """Call eval_utils.compute_video_metrics()"""
+    """Call eval_utils.compute_video_metrics(); return auc/op50/op75/p/pnorm"""
     
-def aggregate_video(window_size, video_id, category, metrics_csv_path, data_root):
+def aggregate_video(window_size, video_id, category, metrics_csv_path, data_root, pred_root):
     """Aggregate all metrics for one (window_size, video) pair
-    Return dict with 27 fields"""
+    Return dict matching the Stage 2 schema"""
     
 def write_results_csv(results, out_path):
     """Write list of dicts to CSV"""
@@ -132,9 +156,12 @@ def generate_summary_json(results, out_path):
 
 - [ ] Create skeleton with CLI parsing
 - [ ] Implement CSV discovery and metrics extraction
+- [ ] Require `--data_root` for GT/visibility lookup
+- [ ] Add `--pred_root` defaulting to `results/stage2`
+- [ ] Load predictions from `{pred_root}/{window_size}/{video}.txt`
 - [ ] Implement per-frame IoU computation
-- [ ] Integrate eval_utils for quality metrics
-- [ ] Implement aggregate_video() combining all 27 fields
+- [ ] Integrate eval_utils for quality metrics (`auc`, `op50`, `op75`, `p`, `pnorm`)
+- [ ] Implement aggregate_video() combining all Stage 2 schema fields
 - [ ] Add config snapshot and derived fields
 - [ ] Implement CSV writer with proper schema
 - [ ] Implement summary JSON generator
@@ -197,9 +224,10 @@ def write_selection_json(n_star, rationale, out_path):
 **Steps:**
 
 - [ ] Run batch: `python scripts/stage2_run_batch.py --data_root data/small_LaSOT --splits splits/splits_small_v1.json --metrics_dir metrics/stage2_small --window_sizes 6,75`
-- [ ] Verify 24 CSVs created in metrics/stage2_small/{6,75}/
-- [ ] Run aggregator: `python scripts/stage2_aggregate.py --metrics_dir metrics/stage2_small --splits splits/splits_small_v1.json --out_dir analysis/stage2_small`
-- [ ] Verify stage2_results.csv has 24 rows, 27 columns
+- [ ] Verify 24 CSVs created in `metrics/stage2_small/{6,75}/stage2/`
+- [ ] Verify 24 prediction txt files exist in `results/stage2/{6,75}/`
+- [ ] Run aggregator: `python scripts/stage2_aggregate.py --metrics_dir metrics/stage2_small --data_root data/small_LaSOT --pred_root results/stage2 --splits splits/splits_small_v1.json --out_dir analysis/stage2_small`
+- [ ] Verify stage2_results.csv has 24 rows and matches the Stage 2 schema
 - [ ] Verify per_frame_iou is valid JSON
 - [ ] Verify config fields correct (auto_promote_enabled=False, release_interval=10)
 - [ ] Run N* selector: `python scripts/stage2_select_n_star.py --results_csv analysis/stage2_small/stage2_results.csv --out_dir analysis/stage2_small`

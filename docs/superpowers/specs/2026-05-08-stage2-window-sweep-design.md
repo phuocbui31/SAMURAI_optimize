@@ -34,12 +34,13 @@ scripts/stage2_run_batch.py
   │    │    --keep_window_maskmem={window_size}
   │    │    --release_interval=10  (tight cleanup for accurate memory measurement)
   │    │    --evaluate  (compute LaSOT metrics)
-  │    └─ Capture per-video metrics → intermediate CSV
+  │    └─ Write per-frame logs + window-scoped predictions
   └─ Done
 
 scripts/stage2_aggregate.py
-  ├─ Load all intermediate CSVs from metrics/stage2_lasot/{window_size}/
-  ├─ Compute per-video summary (AUC, FPS, memory, per-frame IoU)
+  ├─ Load per-frame CSVs from metrics/stage2_lasot/{window_size}/stage2/
+  ├─ Load window-scoped predictions from results/stage2/{window_size}/
+  ├─ Recompute per-video AUC/P/Pnorm from predictions + LaSOT GT
   ├─ Write consolidated stage2_results.csv
   └─ Generate summary statistics per window_size
 ```
@@ -53,8 +54,8 @@ Input:
   - analysis/stage1/candidate_window_sizes.json (window sizes)
 
 Intermediate:
-  - metrics/stage2_lasot/{window_size}/{video}_stage2.csv (per-frame logs)
-  - metrics/stage2_lasot/{window_size}/{video}_stage2_meta.json (sidecar)
+  - metrics/stage2_lasot/{window_size}/stage2/{video}.csv (per-frame logs)
+  - results/stage2/{window_size}/{video}.txt (predicted boxes, x,y,w,h)
 
 Output:
   - analysis/stage2/stage2_results.csv (per-video summary, 700 rows)
@@ -96,10 +97,10 @@ python scripts/stage2_run_batch.py \
 - `--dry_run`: Print pending jobs without running
 
 **Resume logic:**
-- Check if `{metrics_dir}/{window_size}/{video}_stage2.csv` exists
-- Check if sidecar `{video}_stage2_meta.json` exists
+- Check if `{metrics_dir}/{window_size}/stage2/{video}.csv` exists with >1 line
+- Check if `results/stage2/{window_size}/{video}.txt` exists
 - If both exist → skip
-- If only CSV exists (crashed run) → delete CSV and re-run
+- If only CSV or prediction exists → treat as partial and re-run that pair
 
 **Invocation to main_inference.py:**
 ```bash
@@ -115,7 +116,8 @@ python scripts/main_inference.py \
   --data_root={data_root} \
   --testing_set={temp_file_with_video_list} \
   --metrics_dir={metrics_dir}/{window_size} \
-  --run_tag=stage2
+  --run_tag=stage2 \
+  --pred_dir=results/stage2/{window_size}
 ```
 
 **Key differences from Stage 1:**
@@ -125,7 +127,11 @@ python scripts/main_inference.py \
 - `--log_metrics` (capture FPS, RAM, VRAM per-frame for aggregation)
 - No `--log_maskmem_profile` (Stage 2 doesn't need distance logging)
 
-**Note on intermediate CSVs:** With `--log_metrics` enabled, `main_inference.py` writes per-frame metrics to `{metrics_dir}/{window_size}/{video}_metrics.csv` (schema: frame_idx, wall_time_s, dt_ms, iter_per_sec, ram_mb, vram_alloc_mb, vram_peak_mb). The aggregator extracts FPS and memory metrics from these CSVs. The `--evaluate` flag causes LaSOT metrics (AUC, OP50, etc.) to be printed to stdout, which the batch runner can capture, or the aggregator can re-compute from predictions.
+**Note on intermediate CSVs:** With `--log_metrics` enabled, `main_inference.py`
+writes per-frame metrics to `{metrics_dir}/{window_size}/stage2/{video}.csv`
+because Stage 2 passes `--run_tag stage2`. The aggregator extracts FPS and
+memory metrics from these CSVs. The `--evaluate` flag may still print metrics
+for operator feedback, but the aggregator must not parse stdout.
 
 ### 3.2 Main Inference Modifications
 
@@ -135,7 +141,16 @@ python scripts/main_inference.py \
 - `--keep_window_maskmem` parameter
 - `--evaluate` flag (compute LaSOT metrics via `eval_utils.py`)
 
-**Required modifications:** NONE for core inference.
+**Required modification for Stage 2 aggregation:** add optional `--pred_dir`.
+Default behavior remains unchanged:
+
+- If `--pred_dir` is omitted, predictions continue to be written to
+  `results/samurai/samurai_<model_name>/<video>.txt`.
+- If `--pred_dir` is provided, predictions are written to
+  `{pred_dir}/{video}.txt`.
+
+Stage 2 batch runner must pass `--pred_dir results/stage2/{window_size}` so
+predictions from different window sizes do not overwrite each other.
 
 **Optional enhancement:** Add `--log_stage2_metrics` flag to write per-video summary inline (avoid separate aggregate step). But this adds complexity — better to keep aggregate separate for now.
 
@@ -144,9 +159,11 @@ python scripts/main_inference.py \
 **Purpose:** Consolidate intermediate CSVs into final per-video summary.
 
 **Key responsibilities:**
-1. Discover all `*_stage2.csv` files in `metrics/stage2_lasot/{window_size}/`
+1. Discover all `*.csv` files in `metrics/stage2_lasot/{window_size}/stage2/`
 2. For each (video, window_size) pair:
-   - Extract evaluation metrics (AUC, OP50, OP75, P, Pnorm)
+   - Load prediction file `results/stage2/{window_size}/{video}.txt`
+   - Load GT and LaSOT visibility from `data_root`
+   - Recompute evaluation metrics (AUC, OP50, OP75, P, Pnorm)
    - Compute FPS (mean across frames)
    - Extract memory metrics (peak/mean/final membank RAM, peak VRAM)
    - Extract per-frame IoU array
@@ -158,6 +175,8 @@ python scripts/main_inference.py \
 ```bash
 python scripts/stage2_aggregate.py \
   --metrics_dir metrics/stage2_lasot \
+  --data_root data/LaSOT \
+  --pred_root results/stage2 \
   --splits splits/splits_v1.json \
   --out_dir analysis/stage2
 ```
@@ -228,17 +247,28 @@ airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,16.3,122.4,45.2,38
 
 ### 4.2 Data Sources
 
-**From `eval_utils.compute_video_metrics()`:**
-- `auc`, `success_0.5`, `success_0.75`, `p`, `pnorm`
+**Quality metrics (recommended path B):**
+- Aggregator recomputes quality metrics from saved predictions and GT.
+- Prediction path: `{pred_root}/{window_size}/{video}.txt`.
+- GT path: `{data_root}/{category}/{video}/groundtruth.txt`.
+- Visibility path: `full_occlusion.txt` + `out_of_view.txt`.
+- Function: `eval_utils.compute_video_metrics(pred_xywh, gt_xywh, target_visible)`.
+- Output fields: `auc`, `success_0.5`, `success_0.75`, `p`, `pnorm`.
 
 **Per-frame IoU array:**
-- Must be captured during inference by storing IoU between predicted bbox and GT bbox at each frame
-- **Implementation note:** `main_inference.py` needs modification to save per-frame IoU array. Current `--evaluate` flag only computes aggregate metrics. Two options:
-  1. Modify `main_inference.py` to save per-frame IoU to separate file (e.g., `{video}_iou.npy`)
-  2. Aggregator re-computes per-frame IoU from saved predictions (bbox txt files) and GT
-- **Recommended:** Option 2 (re-compute in aggregator) to avoid modifying inference code
+- Aggregator recomputes per-frame IoU from the same window-scoped prediction
+  file and GT. Do not store IoU during inference.
 
-**From per-frame logs (`{video}_metrics.csv` via `--log_metrics`):**
+**Prediction overwrite handling:**
+1. **Primary path:** save predictions by window using `--pred_dir
+   results/stage2/{window_size}`. This supports cumulative aggregation after
+   all windows finish.
+2. **Legacy fallback:** if using the default shared prediction directory
+   `results/samurai/samurai_<model_name>/`, run aggregation immediately after
+   each window before the next window overwrites predictions. This mode is only
+   for debugging and is not the default Stage 2 workflow.
+
+**From per-frame logs (`{metrics_dir}/{window_size}/stage2/{video}.csv` via `--log_metrics`):**
 - `fps_mean` (mean of `iter_per_sec` column)
 - `total_time_s` (last `wall_time_s` value)
 - `membank_ram_peak_mb`, `membank_ram_mean_mb`, `membank_ram_final_mb` (from `ram_mb` column)
@@ -274,6 +304,8 @@ python scripts/stage2_run_batch.py \
 # 3. Aggregate results so far
 python scripts/stage2_aggregate.py \
   --metrics_dir metrics/stage2_lasot \
+  --data_root data/LaSOT \
+  --pred_root results/stage2 \
   --splits splits/splits_v1.json \
   --out_dir analysis/stage2
 
@@ -289,6 +321,8 @@ python scripts/stage2_run_batch.py \
 # 6. Re-aggregate (cumulative)
 python scripts/stage2_aggregate.py \
   --metrics_dir metrics/stage2_lasot \
+  --data_root data/LaSOT \
+  --pred_root results/stage2 \
   --splits splits/splits_v1.json \
   --out_dir analysis/stage2
 
@@ -328,6 +362,8 @@ CUDA_VISIBLE_DEVICES=4 python scripts/stage2_run_batch.py \
 # After all complete, aggregate once
 python scripts/stage2_aggregate.py \
   --metrics_dir metrics/stage2_lasot \
+  --data_root data/LaSOT \
+  --pred_root results/stage2 \
   --splits splits/splits_v1.json \
   --out_dir analysis/stage2
 ```
@@ -408,10 +444,11 @@ python scripts/stage2_run_batch.py \
 # Should complete in ~1h
 # Verify:
 # 1. All 12 videos × 2 window_sizes = 24 CSVs created
-# 2. Aggregate produces stage2_results.csv with 24 rows
-# 3. Schema matches spec (27 columns)
-# 4. per_frame_iou is valid JSON
-# 5. Config fields correct (auto_promote_enabled=False, release_interval=10)
+# 2. All 12 videos × 2 window_sizes = 24 prediction txt files created
+# 3. Aggregate produces stage2_results.csv with 24 rows
+# 4. Schema matches spec
+# 5. per_frame_iou is valid JSON
+# 6. Config fields correct (auto_promote_enabled=False, release_interval=10)
 ```
 
 ### 7.2 AST Tests
@@ -422,7 +459,7 @@ python scripts/stage2_run_batch.py \
 - Verify batch log format
 
 **`tests/test_stage2_aggregate.py`:**
-- Verify CSV schema (27 columns)
+- Verify CSV schema matches Section 4.1
 - Verify per_frame_iou JSON parsing
 - Verify failure counts derivation
 - Verify idempotent (re-run produces same output)
@@ -464,9 +501,9 @@ samurai_optimized/
 ├── metrics/
 │   └── stage2_lasot/                # NEW: Intermediate CSVs
 │       ├── 6/                       # Window size subdirs
-│       │   ├── airplane-5_stage2.csv
-│       │   ├── airplane-5_stage2_meta.json
-│       │   └── ...
+│       │   └── stage2/
+│       │       ├── airplane-5.csv
+│       │       └── ...
 │       ├── 7/
 │       ├── 8/
 │       ├── 75/
@@ -477,6 +514,16 @@ samurai_optimized/
     ├── test_stage2_run_batch.py     # NEW: Batch runner tests
     ├── test_stage2_aggregate.py     # NEW: Aggregator tests
     └── test_stage2_select_n_star.py # NEW: N* selection tests
+
+results/
+└── stage2/
+    ├── 6/
+    │   ├── airplane-5.txt
+    │   └── ...
+    ├── 7/
+    ├── 8/
+    ├── 75/
+    └── 150/
 ```
 
 ---
@@ -494,6 +541,7 @@ samurai_optimized/
 - `scripts/stage2_aggregate.py` — CSV consolidation
 - `scripts/stage2_select_n_star.py` — N* selection
 - `tests/test_stage2_*.py` — test suite
+- `scripts/main_inference.py --pred_dir` — optional prediction output override
 
 **Python packages (already available):**
 - `pandas` — CSV manipulation
@@ -546,9 +594,11 @@ samurai_optimized/
 - **Impact:** 700 files × 50KB ≈ 35MB (acceptable)
 - **Mitigation:** If disk space tight, delete intermediate CSVs after aggregate
 
-**Risk 2: main_inference.py doesn't output needed metrics**
-- **Impact:** Aggregator can't extract data
-- **Mitigation:** Verify eval_utils output format in smoke test first
+**Risk 2: Missing or overwritten prediction files**
+- **Impact:** Aggregator cannot recompute AUC/P/Pnorm for the affected window size
+- **Mitigation:** Aggregator does not parse stdout. It recomputes metrics from
+  window-scoped prediction files and LaSOT GT. Smoke test must verify
+  prediction files exist for every `(window_size, video)` pair.
 
 **Risk 3: Window size too small causes tracking failure**
 - **Impact:** N=6 or N=7 may cause severe tracking degradation (low IoU, lost objects) on videos with long occlusions or fast motion, because the memory bank cannot look back far enough to recover appearance

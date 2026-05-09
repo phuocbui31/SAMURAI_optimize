@@ -353,8 +353,31 @@ Stage 2 cần sweep các candidate:
 6, 7, 8, 75, 150
 ```
 
-Sau đó chọn `N*` theo trade-off giữa accuracy và memory, dùng các metric như
-AUC, OP50, OP75, Prec@20 và NormPrec@0.20.
+Sau đó chọn `N*` theo trade-off giữa accuracy và memory. Bộ metric chính đã
+được chuẩn hóa theo cách report của SAMURAI paper:
+
+```text
+AUC, P, Pnorm
+```
+
+Trong đó `P` là AUC của precision curve trên ngưỡng center error `[0, 50]`
+pixel, còn `Pnorm` là AUC của normalized precision curve trên `[0, 0.5]`.
+`OP50` và `OP75` vẫn có thể giữ làm metric phụ vì chúng lấy trực tiếp từ
+success curve. `Prec@20`, `NormPrec@0.20` và `mIoU` không còn là output chính
+của `--evaluate`.
+
+Metric inline của `--evaluate` đã đổi trong `scripts/eval_utils.py`, nơi bảng
+hiện in:
+
+```text
+AUC  OP50  OP75  P  Pnorm
+```
+
+Để aggregate Stage 2 theo nhiều window size mà không bị overwrite prediction,
+spec/plan mới yêu cầu thêm `--pred_dir` cho `scripts/main_inference.py` và để
+`scripts/stage2_run_batch.py` truyền `--pred_dir results/stage2/{window_size}`.
+Phần này là bước triển khai tiếp theo; nếu chưa có `--pred_dir`, chỉ nên dùng
+`--evaluate` để xem metric trên stdout, chưa đủ an toàn cho aggregator cộng dồn.
 
 ## Cách diễn đạt trong báo cáo
 
