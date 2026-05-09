@@ -152,10 +152,10 @@ Hai metrics này tính từ logs Stage 1, **không cần chạy lại model**.
 
 ### 3.6 Quality metrics (chuẩn LaSOT)
 
-- **Success rate $S(\tau)$:** tỷ lệ frames có $\text{IoU}(\hat{b}_t, b_t) \geq \tau$.
+- **Success rate $S(\tau)$:** tỷ lệ frames có $\text{IoU}(\hat{b}_t, b_t) > \tau$.
 - **AUC:** $\int_0^1 S(\tau) \, d\tau$, approximate qua 21 thresholds $\tau \in \{0, 0.05, \ldots, 1\}$.
-- **Precision $P_{20}$:** tỷ lệ frames có Euclidean distance giữa centers $\leq 20$ pixels.
-- **Normalized Precision $P_{\text{norm}}$.**
+- **Precision $P$:** AUC của precision curve theo center error trên 51 thresholds $[0, 50]$ pixels.
+- **Normalized Precision $P_{\text{norm}}$:** AUC của normalized precision curve trên 51 thresholds $[0, 0.5]$.
 
 **Aggregation:** unweighted mean across videos.
 
@@ -315,7 +315,7 @@ Round to nice numbers (5, 10, 25, 50, 100 boundaries) cho cleaner reporting. Ded
 
 **Procedure:**
 1. Với mỗi $N$ trong candidate set, chạy SAMURAI+SWM trên train-val videos.
-2. Compute per-video AUC, $S_{0.5}$, $P_{20}$, $P_{\text{norm}}$, FPS, peak memory bank RAM, peak GPU VRAM.
+2. Compute per-video AUC, $S_{0.5}$, $P$, $P_{\text{norm}}$, FPS, peak memory bank RAM, peak GPU VRAM.
 3. Aggregate thành table $N$ × metrics.
 4. Statistical analysis (Section 8).
 
@@ -353,7 +353,7 @@ Nếu không có $N$ nào thỏa cả 2, fallback chọn $N$ có mean AUC cao nh
 
 **Procedure:**
 1. Chạy mỗi setting trên test videos.
-2. Compute AUC, $S_{0.5}$, $P_{20}$, $P_{\text{norm}}$, FPS, memory bank RAM, GPU VRAM.
+2. Compute AUC, $S_{0.5}$, $P$, $P_{\text{norm}}$, FPS, memory bank RAM, GPU VRAM.
 3. Per-attribute breakdown.
 4. Failure case analysis: identify videos AUC drop lớn nhất giữa SAMURAI gốc vs SWM($N^*$).
 
@@ -463,7 +463,7 @@ Per video:
 
 Per (window_size $N$, video):
 - Identifier (`video_id`, `category`, `window_size`)
-- Quality: AUC, $S_{0.5}$, $P_{20}$, $P_{\text{norm}}$
+- Quality: AUC, $S_{0.5}$, $P$, $P_{\text{norm}}$
 - Efficiency: FPS, total inference time
 - Memory: peak/mean/final memory bank RAM, peak GPU VRAM
 - Per-frame IoU array (cho failure analysis)
@@ -604,7 +604,7 @@ Nếu các thành phần này cũng grow với candidate pool size, cần **bổ
 
 ### 8.1 Quality metrics
 
-Đã định nghĩa Section 3.6. **AUC** primary, $S_{0.5}$ và $P_{20}$ secondary.
+Đã định nghĩa Section 3.6. **AUC**, $P$, và $P_{\text{norm}}$ là metrics chính theo paper; $S_{0.5}$ là secondary.
 
 ### 8.2 Efficiency metrics
 

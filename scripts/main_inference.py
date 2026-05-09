@@ -120,7 +120,7 @@ parser.add_argument(
     "--evaluate",
     action="store_true",
     default=False,
-    help="Tính metric LaSOT (AUC/OP50/OP75/Prec@20/NormPrec@0.20) sau mỗi video và in bảng tổng cuối.",
+    help="Tính metric LaSOT (AUC/OP50/OP75/P/Pnorm) sau mỗi video và in bảng tổng cuối.",
 )
 parser.add_argument(
     "--log_metrics",

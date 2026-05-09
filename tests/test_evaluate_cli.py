@@ -41,10 +41,15 @@ for node in ast.walk(tree):
         )
         break
 
-# 4. Phải reuse calc_seq_err_robust từ lib.test gốc (không copy implementation)
+# 4. Metrics chính phải là P/Pnorm curve AUC, không phải point metrics.
+assert '"p"' in eval_src, "eval_utils.py must return p"
+assert '"pnorm"' in eval_src, "eval_utils.py must return pnorm"
+assert "prec_20" not in eval_src, "eval_utils.py must not report Prec@20 as primary metric"
 assert (
-    "from lib.test.analysis.extract_results import calc_seq_err_robust" in eval_src
-), "eval_utils.py must reuse calc_seq_err_robust from lib.test.analysis"
+    "norm_prec_020" not in eval_src
+), "eval_utils.py must not report NormPrec@0.20 as primary metric"
+assert "mIoU" not in eval_src, "eval_utils.py must not report mIoU"
+assert "mean_iou" not in eval_src, "eval_utils.py must not compute mean_iou"
 
 # 5. --evaluate default = False (an toàn cho dataset không có GT) — phải kiểm
 # tra block thực sự được vào, không pass im lặng nếu flag bị đổi tên.

@@ -46,7 +46,7 @@ parser.add_argument(
     "--evaluate",
     action="store_true",
     default=False,
-    help="Tính metric LaSOT (AUC/OP50/OP75/Prec@20/NormPrec@0.20) sau mỗi video và in bảng tổng cuối.",
+    help="Tính metric LaSOT (AUC/OP50/OP75/P/Pnorm) sau mỗi video và in bảng tổng cuối.",
 )
 parser.add_argument(
     "--log_metrics",
@@ -223,15 +223,17 @@ try:
                 ):
                     if metrics_logger is not None:
                         state_stats = None
-                        if args.log_state_size and hasattr(predictor, "get_state_size_stats"):
+                        if args.log_state_size and hasattr(
+                            predictor, "get_state_size_stats"
+                        ):
                             state_stats = predictor.get_state_size_stats(state)
                         metrics_logger.log(frame_idx, state_stats=state_stats)
                     mask_to_vis = {}
                     bbox_to_vis = {}
 
-                    assert len(masks) == 1 and len(object_ids) == 1, (
-                        "Only one object is supported right now"
-                    )
+                    assert (
+                        len(masks) == 1 and len(object_ids) == 1
+                    ), "Only one object is supported right now"
                     for obj_id, mask in zip(object_ids, masks):
                         mask = mask[0].cpu().numpy()
                         mask = mask > 0.0
@@ -252,7 +254,9 @@ try:
 
                         for obj_id in mask_to_vis.keys():
                             mask_img = np.zeros((height, width, 3), np.uint8)
-                            mask_img[mask_to_vis[obj_id]] = color[(obj_id + 1) % len(color)]
+                            mask_img[mask_to_vis[obj_id]] = color[
+                                (obj_id + 1) % len(color)
+                            ]
                             img = cv2.addWeighted(img, 1, mask_img, 0.75, 0)
 
                         for obj_id in bbox_to_vis.keys():

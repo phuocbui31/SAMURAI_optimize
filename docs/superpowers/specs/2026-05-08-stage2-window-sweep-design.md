@@ -146,7 +146,7 @@ python scripts/main_inference.py \
 **Key responsibilities:**
 1. Discover all `*_stage2.csv` files in `metrics/stage2_lasot/{window_size}/`
 2. For each (video, window_size) pair:
-   - Extract evaluation metrics (AUC, OP50, OP75, Prec@20, NormPrec)
+   - Extract evaluation metrics (AUC, OP50, OP75, P, Pnorm)
    - Compute FPS (mean across frames)
    - Extract memory metrics (peak/mean/final membank RAM, peak VRAM)
    - Extract per-frame IoU array
@@ -166,8 +166,8 @@ python scripts/stage2_aggregate.py \
 
 **`stage2_results.csv`** (per-video summary, 700 rows):
 ```csv
-video_id,category,split,window_size,auc,success_0.5,success_0.75,precision_20,norm_precision_0.20,mean_iou,fps_mean,total_time_s,membank_ram_peak_mb,membank_ram_mean_mb,membank_ram_final_mb,gpu_vram_peak_mb,num_frames,run_timestamp,samurai_commit_hash,release_interval,auto_promote_enabled,num_maskmem,per_frame_iou,n_frames_iou_below_0.3,n_frames_iou_below_0.5
-airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,0.698,16.3,122.4,45.2,38.1,42.3,1024.5,2000,2026-05-08T10:23:45,a1b2c3d,10,false,7,"[0.85,0.87,...,0.81]",45,180
+video_id,category,split,window_size,auc,success_0.5,success_0.75,p,pnorm,fps_mean,total_time_s,membank_ram_peak_mb,membank_ram_mean_mb,membank_ram_final_mb,gpu_vram_peak_mb,num_frames,run_timestamp,samurai_commit_hash,release_interval,auto_promote_enabled,num_maskmem,per_frame_iou,n_frames_iou_below_0.3,n_frames_iou_below_0.5
+airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,16.3,122.4,45.2,38.1,42.3,1024.5,2000,2026-05-08T10:23:45,a1b2c3d,10,false,7,"[0.85,0.87,...,0.81]",45,180
 ...
 ```
 
@@ -206,11 +206,10 @@ airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,0.698,16.3,122.4,4
 | `split` | str | Always "train_val" for Stage 2 | splits |
 | `window_size` | int | Candidate window size (6, 7, 8, 75, 150) | config |
 | `auc` | float | Area under success curve | eval_utils |
-| `success_0.5` | float | Success rate at IoU ≥ 0.5 (OP50) | eval_utils |
-| `success_0.75` | float | Success rate at IoU ≥ 0.75 (OP75) | eval_utils |
-| `precision_20` | float | Precision at center error ≤ 20px | eval_utils |
-| `norm_precision_0.20` | float | Normalized precision at 0.20 | eval_utils |
-| `mean_iou` | float | Mean IoU over valid frames | eval_utils |
+| `success_0.5` | float | Success rate at IoU > 0.5 (OP50) | eval_utils |
+| `success_0.75` | float | Success rate at IoU > 0.75 (OP75) | eval_utils |
+| `p` | float | AUC of center-error precision curve over [0, 50] px | eval_utils |
+| `pnorm` | float | AUC of normalized precision curve over [0, 0.5] | eval_utils |
 | `fps_mean` | float | Average FPS across video | metrics_logger |
 | `total_time_s` | float | Total inference time | metrics_logger |
 | `membank_ram_peak_mb` | float | Peak memory bank RAM | introspection |
@@ -230,7 +229,7 @@ airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,0.698,16.3,122.4,4
 ### 4.2 Data Sources
 
 **From `eval_utils.compute_video_metrics()`:**
-- `auc`, `success_0.5`, `success_0.75`, `precision_20`, `norm_precision_0.20`, `mean_iou`
+- `auc`, `success_0.5`, `success_0.75`, `p`, `pnorm`
 
 **Per-frame IoU array:**
 - Must be captured during inference by storing IoU between predicted bbox and GT bbox at each frame
