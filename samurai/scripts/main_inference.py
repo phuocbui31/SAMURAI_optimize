@@ -223,9 +223,7 @@ try:
                 ):
                     if metrics_logger is not None:
                         state_stats = None
-                        if args.log_state_size and hasattr(
-                            predictor, "get_state_size_stats"
-                        ):
+                        if args.log_state_size and hasattr(predictor, "get_state_size_stats"):
                             state_stats = predictor.get_state_size_stats(state)
                         metrics_logger.log(frame_idx, state_stats=state_stats)
                     mask_to_vis = {}

@@ -2,14 +2,26 @@
 
 import ast
 import pathlib
-import sys
 
 import torch
 
 ROOT = pathlib.Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "samurai" / "sam2"))
 
-from sam2.modeling.sam2_base import _compute_maskmem_ram_bytes  # noqa: E402
+
+def _load_helper():
+    src = (ROOT / "samurai/sam2/sam2/modeling/sam2_base.py").read_text()
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_compute_maskmem_ram_bytes":
+            module = ast.Module(body=[node], type_ignores=[])
+            ast.fix_missing_locations(module)
+            namespace = {}
+            exec(compile(module, "<sam2_base_helper>", "exec"), namespace)
+            return namespace["_compute_maskmem_ram_bytes"]
+    raise AssertionError("_compute_maskmem_ram_bytes not found")
+
+
+_compute_maskmem_ram_bytes = _load_helper()
 
 
 def _make_entry(c=64, h=4, w=4, dtype=torch.float32, device="cpu"):
