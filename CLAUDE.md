@@ -638,6 +638,72 @@ python scripts/stage1_aggregate.py \
 Spec: `docs/superpowers/specs/2026-05-02-stage1-incremental-lasot-design.md`.
 Plan: `docs/superpowers/plans/2026-05-03-stage1-incremental-lasot.md`.
 
+### Stage 2 Window Sweep (`scripts/stage2_run_batch.py`, `scripts/stage2_aggregate.py`, `scripts/stage2_select_n_star.py`)
+
+Workflow để sweep candidate window sizes `[6, 7, 8, 75, 150]` trên locked
+`train_val` split, đo trade-off quality/FPS/RAM và chọn `N*`.
+
+```bash
+# Dry-run trước để xem video nào đã có trên disk và cặp (window, video) nào pending
+python scripts/stage2_run_batch.py \
+    --data_root data/LaSOT \
+    --splits splits/splits_v1.json \
+    --metrics_dir metrics/stage2_lasot \
+    --dry_run
+
+# Chạy Stage 2. Có thể giới hạn category hoặc window để chạy incremental/GPU parallel.
+python scripts/stage2_run_batch.py \
+    --data_root data/LaSOT \
+    --splits splits/splits_v1.json \
+    --metrics_dir metrics/stage2_lasot \
+    --window_sizes 6,7,8,75,150
+
+# Aggregate per-frame metrics + predictions thành per-video summary.
+python scripts/stage2_aggregate.py \
+    --metrics_dir metrics/stage2_lasot \
+    --data_root data/LaSOT \
+    --pred_root results/stage2 \
+    --splits splits/splits_v1.json \
+    --out_dir analysis/stage2
+
+# Chọn N* bằng tiêu chí Wilcoxon + mean AUC drop.
+python scripts/stage2_select_n_star.py \
+    --results_csv analysis/stage2/stage2_results.csv \
+    --out_dir analysis/stage2
+```
+
+Batch runner truyền `--pred_dir results/stage2/{window_size}` vào
+`main_inference.py`, nên prediction txt của các window size không overwrite
+nhau. Resume logic chỉ skip khi cả
+`metrics/stage2_lasot/{window_size}/stage2/{video}.csv` và
+`results/stage2/{window_size}/{video}.txt` đều tồn tại và có số frame khớp.
+
+Smoke nhỏ nếu có `data/small_LaSOT`:
+
+```bash
+python scripts/stage2_run_batch.py \
+    --data_root data/small_LaSOT \
+    --splits splits/splits_small_v1.json \
+    --metrics_dir metrics/stage2_small \
+    --window_sizes 6,75
+
+python scripts/stage2_aggregate.py \
+    --metrics_dir metrics/stage2_small \
+    --data_root data/small_LaSOT \
+    --pred_root results/stage2 \
+    --splits splits/splits_small_v1.json \
+    --out_dir analysis/stage2_small
+
+python scripts/stage2_select_n_star.py \
+    --results_csv analysis/stage2_small/stage2_results.csv \
+    --out_dir analysis/stage2_small
+```
+
+AST/runtime tests:
+- `tests/test_stage2_run_batch.py` — CLI, resume logic, `--pred_dir` wiring
+- `tests/test_stage2_aggregate.py` — synthetic LaSOT aggregate output/schema
+- `tests/test_stage2_select_n_star.py` — fake-data N* selection behavior
+
 ## FAQ & Troubleshooting
 
 **Q: Do I need to train SAMURAI?**
@@ -713,4 +779,3 @@ kf_s = torch.as_tensor(kf).reshape(-1)[0]  # only when kf is not None
 - **Original SAM 2**: [facebookresearch/sam2](https://github.com/facebookresearch/sam2)
 - **VOT Toolkit**: [votchallenge/toolkit](https://github.com/votchallenge/toolkit) (modified in `lib/test/`)
 - **Datasets**: LaSOT, GOT-10k, OTB, TrackingNet, UAV123, NFS (see `README.md` for URLs)
-

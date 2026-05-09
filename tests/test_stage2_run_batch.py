@@ -1,10 +1,27 @@
-"""AST test: scripts/stage2_run_batch.py CLI flags + helper functions."""
+"""Plain-Python tests for Stage 2 batch runner wiring and resume logic."""
 
 import ast
+import importlib.util
 import pathlib
+import sys
+import tempfile
+
 
 ROOT = pathlib.Path(__file__).parent.parent
 SCRIPT = ROOT / "scripts" / "stage2_run_batch.py"
+MAIN_INFERENCE = ROOT / "scripts" / "main_inference.py"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("stage2_run_batch", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_text(path: pathlib.Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
 
 
 def test_ast():
@@ -12,32 +29,264 @@ def test_ast():
     tree = ast.parse(src)
     names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
 
-    # Required functions
-    for fn in ("parse_args", "load_splits", "filter_categories", "detect_on_disk",
-               "is_video_complete", "build_pending_list", "run_pending", "main"):
+    for fn in (
+        "parse_args",
+        "load_splits",
+        "filter_categories",
+        "detect_on_disk",
+        "is_video_complete",
+        "cleanup_partial_csvs",
+        "build_pending_list",
+        "run_pending",
+        "main",
+    ):
         assert fn in names, f"missing function {fn} (have {names})"
 
-    # Required CLI flags
     for flag in ("--data_root", "--splits", "--metrics_dir",
                  "--window_sizes", "--categories", "--dry_run"):
         assert flag in src, f"missing flag {flag}"
 
-    # Stage 2 specific tokens
     assert '"train_val"' in src, "must use train_val split (not train_dev)"
-    assert "_metrics.csv" in src, "must use _metrics.csv (not _maskmem_profile.csv)"
+    assert "stage2" in src, "must use stage2 run_tag/output paths"
+    assert "results/stage2" in src, "must use window-scoped Stage 2 prediction root"
+    assert "--pred_dir" in src, "must pass --pred_dir to main_inference.py"
     assert "main_inference.py" in src, "must invoke main_inference.py"
     assert "--optimized" in src, "must pass --optimized flag"
     assert "--no_auto_promote" in src, "must pass --no_auto_promote flag"
     assert "--evaluate" in src, "must pass --evaluate flag"
     assert "--log_metrics" in src, "must pass --log_metrics flag"
 
-    # Stage 1 tokens should NOT be present
     assert "--log_maskmem_profile" not in src, "Stage 2 should not use --log_maskmem_profile"
     assert "main_inference_preload.py" not in src, "Stage 2 should not use preload script"
-
-    # Must use subprocess
     assert "subprocess" in src, "must use subprocess module"
 
 
+def test_main_inference_pred_dir_ast():
+    src = MAIN_INFERENCE.read_text()
+    assert "--pred_dir" in src, "main_inference.py must expose --pred_dir"
+    assert "args.pred_dir" in src, "main_inference.py must use args.pred_dir"
+    assert "results/{exp_name}/{exp_name}_{model_name}" in src, "default pred path unchanged"
+
+
+def test_completion_requires_metrics_csv_and_prediction_txt():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        vid = "airplane-1"
+
+        assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
+
+        write_text(metrics_dir / "6" / "stage2" / f"{vid}.csv", "header\nrow\n")
+        assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
+
+        write_text(pred_root / "6" / f"{vid}.txt", "1,2,3,4\n")
+        assert mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
+
+        write_text(metrics_dir / "7" / "stage2" / f"{vid}.csv", "header\n")
+        write_text(pred_root / "7" / f"{vid}.txt", "1,2,3,4\n")
+        assert not mod.is_video_complete(str(metrics_dir), 7, vid, pred_root=str(pred_root))
+
+        write_text(metrics_dir / "8" / "stage2" / f"{vid}.csv", "header\nrow\n")
+        write_text(pred_root / "8" / f"{vid}.txt", "")
+        assert not mod.is_video_complete(str(metrics_dir), 8, vid, pred_root=str(pred_root))
+
+        write_text(metrics_dir / "9" / "stage2" / f"{vid}.csv", "header\n\n")
+        write_text(pred_root / "9" / f"{vid}.txt", "1,2,3,4\n")
+        assert not mod.is_video_complete(str(metrics_dir), 9, vid, pred_root=str(pred_root))
+
+        write_text(metrics_dir / "10" / "stage2" / f"{vid}.csv", "header\nrow\nrow\n")
+        write_text(pred_root / "10" / f"{vid}.txt", "1,2,3,4\n")
+        assert not mod.is_video_complete(str(metrics_dir), 10, vid, pred_root=str(pred_root))
+
+
+def test_cleanup_removes_partial_metrics_and_predictions():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        entries = [
+            ("complete-1", "complete", "train_val"),
+            ("metric-only-1", "metric-only", "train_val"),
+            ("pred-only-1", "pred-only", "train_val"),
+            ("header-only-1", "header-only", "train_val"),
+            ("empty-pred-1", "empty-pred", "train_val"),
+        ]
+
+        write_text(metrics_dir / "6" / "stage2" / "complete-1.csv", "header\nrow\n")
+        write_text(pred_root / "6" / "complete-1.txt", "1,2,3,4\n")
+
+        write_text(metrics_dir / "6" / "stage2" / "metric-only-1.csv", "header\nrow\n")
+        write_text(pred_root / "6" / "pred-only-1.txt", "1,2,3,4\n")
+
+        write_text(metrics_dir / "6" / "stage2" / "header-only-1.csv", "header\n")
+        write_text(pred_root / "6" / "header-only-1.txt", "1,2,3,4\n")
+
+        write_text(metrics_dir / "6" / "stage2" / "empty-pred-1.csv", "header\nrow\n")
+        write_text(pred_root / "6" / "empty-pred-1.txt", "")
+
+        cleaned = mod.cleanup_partial_csvs(
+            str(metrics_dir), [6], entries, pred_root=str(pred_root)
+        )
+
+        assert cleaned == [
+            (6, "metric-only-1"),
+            (6, "header-only-1"),
+            (6, "empty-pred-1"),
+        ]
+        assert (metrics_dir / "6" / "stage2" / "complete-1.csv").is_file()
+        assert (pred_root / "6" / "complete-1.txt").is_file()
+        assert (pred_root / "6" / "pred-only-1.txt").is_file()
+        for vid, _, _ in (entries[1], entries[3], entries[4]):
+            assert not (metrics_dir / "6" / "stage2" / f"{vid}.csv").exists()
+            assert not (pred_root / "6" / f"{vid}.txt").exists()
+        assert not (metrics_dir / "6" / "stage2" / "pred-only-1.csv").exists()
+
+
+def test_cleanup_keeps_pred_only_even_if_malformed():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        entries = [("airplane-1", "airplane", "train_val")]
+
+        write_text(pred_root / "6" / "airplane-1.txt", "1,2,3\n")
+
+        cleaned = mod.cleanup_partial_csvs(
+            str(metrics_dir), [6], entries, pred_root=str(pred_root)
+        )
+
+        assert cleaned == []
+        assert (pred_root / "6" / "airplane-1.txt").is_file()
+
+
+def test_build_pending_uses_both_outputs():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        entries = [
+            ("complete-1", "complete", "train_val"),
+            ("metric-only-1", "metric-only", "train_val"),
+        ]
+        write_text(metrics_dir / "6" / "stage2" / "complete-1.csv", "header\nrow\n")
+        write_text(pred_root / "6" / "complete-1.txt", "1,2,3,4\n")
+        write_text(metrics_dir / "6" / "stage2" / "metric-only-1.csv", "header\nrow\n")
+
+        pending, skipped = mod.build_pending_list(
+            entries, str(metrics_dir), [6], pred_root=str(pred_root)
+        )
+        assert skipped == [(6, "complete-1")]
+        assert pending == [(6, "metric-only-1")]
+
+
+def test_completed_categories_require_both_outputs():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        splits = base / "splits.json"
+        write_text(
+            splits,
+            """
+{
+  "splits": {
+    "airplane": {"train_dev": [], "train_val": ["airplane-1"]},
+    "bear": {"train_dev": [], "train_val": ["bear-1"]}
+  }
+}
+""".strip(),
+        )
+        write_text(metrics_dir / "6" / "stage2" / "airplane-1.csv", "header\nrow\n")
+        write_text(pred_root / "6" / "airplane-1.txt", "1,2,3,4\n")
+        write_text(metrics_dir / "6" / "stage2" / "bear-1.csv", "header\nrow\n")
+
+        covered = mod._categories_with_completed_videos(
+            str(metrics_dir), [6], str(splits), pred_root=str(pred_root)
+        )
+        assert covered == ["airplane"]
+
+
+def test_dry_run_does_not_cleanup_predictions():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        data_root = base / "data"
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        splits = base / "splits.json"
+        write_text(
+            splits,
+            '{"splits": {"airplane": {"train_dev": [], "train_val": ["airplane-1"]}}}',
+        )
+        write_text(data_root / "airplane" / "airplane-1" / "img" / "00000001.jpg", "")
+        write_text(pred_root / "6" / "airplane-1.txt", "1,2,3,4\n")
+
+        old_argv = sys.argv
+        old_pred_root = mod.STAGE2_PRED_ROOT
+        try:
+            mod.STAGE2_PRED_ROOT = str(pred_root)
+            sys.argv = [
+                "stage2_run_batch.py",
+                "--data_root",
+                str(data_root),
+                "--splits",
+                str(splits),
+                "--metrics_dir",
+                str(metrics_dir),
+                "--window_sizes",
+                "6",
+                "--dry_run",
+            ]
+            mod.main()
+        finally:
+            sys.argv = old_argv
+            mod.STAGE2_PRED_ROOT = old_pred_root
+
+        assert (pred_root / "6" / "airplane-1.txt").is_file()
+
+
+def test_run_pending_passes_pred_dir(monkeypatch=None):
+    mod = load_module()
+    calls = []
+
+    class Proc:
+        returncode = 0
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return Proc()
+
+    original_run = mod.subprocess.run
+    try:
+        mod.subprocess.run = fake_run
+        rc = mod.run_pending([(6, "airplane-1")], "data/LaSOT", "/tmp/metrics")
+    finally:
+        mod.subprocess.run = original_run
+
+    assert rc == 0
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert "--metrics_dir" in cmd
+    assert cmd[cmd.index("--metrics_dir") + 1] == "/tmp/metrics/6"
+    assert "--run_tag" in cmd
+    assert cmd[cmd.index("--run_tag") + 1] == "stage2"
+    assert "--pred_dir" in cmd
+    assert cmd[cmd.index("--pred_dir") + 1].endswith("results/stage2/6")
+
+
 test_ast()
+test_main_inference_pred_dir_ast()
+test_completion_requires_metrics_csv_and_prediction_txt()
+test_cleanup_removes_partial_metrics_and_predictions()
+test_cleanup_keeps_pred_only_even_if_malformed()
+test_build_pending_uses_both_outputs()
+test_completed_categories_require_both_outputs()
+test_dry_run_does_not_cleanup_predictions()
+test_run_pending_passes_pred_dir()
 print("PASS")

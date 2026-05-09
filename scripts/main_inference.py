@@ -144,6 +144,15 @@ parser.add_argument(
     help="Thư mục gốc chứa CSV. Mặc định: metrics/{exp_name}_{model_name}",
 )
 parser.add_argument(
+    "--pred_dir",
+    type=str,
+    default=None,
+    help=(
+        "Thư mục ghi prediction txt. Mặc định: "
+        "results/{exp_name}/{exp_name}_{model_name}"
+    ),
+)
+parser.add_argument(
     "--run_tag",
     type=str,
     default="default",
@@ -215,7 +224,11 @@ else:
     model_cfg = f"configs/samurai/sam2.1_hiera_{model_name[0]}.yaml"
 
 video_folder = data_root
-pred_folder = f"results/{exp_name}/{exp_name}_{model_name}"
+pred_folder = (
+    args.pred_dir
+    if args.pred_dir
+    else f"results/{exp_name}/{exp_name}_{model_name}"
+)
 
 if args.log_metrics:
     metrics_dir = (

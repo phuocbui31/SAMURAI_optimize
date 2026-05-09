@@ -86,6 +86,44 @@ data/LaSOT
 python scripts/main_inference.py 
 ```
 
+#### Stage 2 Window-Size Sweep
+
+This fork includes an incremental Stage 2 workflow for sweeping optimized
+SAMURAI memory windows on the locked `train_val` split.
+
+```bash
+# Inspect available train_val videos and pending window/video pairs
+python scripts/stage2_run_batch.py \
+  --data_root data/LaSOT \
+  --splits splits/splits_v1.json \
+  --metrics_dir metrics/stage2_lasot \
+  --dry_run
+
+# Run the default candidate windows: 6,7,8,75,150
+python scripts/stage2_run_batch.py \
+  --data_root data/LaSOT \
+  --splits splits/splits_v1.json \
+  --metrics_dir metrics/stage2_lasot
+
+# Aggregate per-frame metrics + window-scoped predictions
+python scripts/stage2_aggregate.py \
+  --metrics_dir metrics/stage2_lasot \
+  --data_root data/LaSOT \
+  --pred_root results/stage2 \
+  --splits splits/splits_v1.json \
+  --out_dir analysis/stage2
+
+# Select N*
+python scripts/stage2_select_n_star.py \
+  --results_csv analysis/stage2/stage2_results.csv \
+  --out_dir analysis/stage2
+```
+
+The batch runner invokes `scripts/main_inference.py` with `--optimized`,
+`--no_auto_promote`, `--release_interval=10`, `--evaluate`, and `--log_metrics`.
+Predictions are written per window under `results/stage2/<window_size>/` via
+`--pred_dir`, so rerunning another window does not overwrite previous outputs.
+
 ## Demo on Custom Video
 
 To run the demo with your custom video or frame directory, use the following examples:
