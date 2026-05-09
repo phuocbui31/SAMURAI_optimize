@@ -51,7 +51,8 @@ def parse_args():
 
 def load_splits(splits_path: str, include_split: str = "train_val") -> list[tuple[str, str, str]]:
     """Return [(video_id, category, split_name)] filtered by include_split (train_val only)."""
-    data = json.loads(open(splits_path).read())
+    with open(splits_path) as f:
+        data = json.loads(f.read())
     out = []
     for cat, group in data["splits"].items():
         if include_split not in group:
@@ -177,7 +178,8 @@ def _git_commit() -> str:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
         ).strip()
-    except Exception:
+    except Exception as e:
+        print(f"Warning: could not get git commit: {e}", file=sys.stderr)
         return ""
 
 
@@ -208,7 +210,8 @@ def write_manifest(metrics_dir: str, *,
 def _categories_with_completed_videos(metrics_dir: str, window_sizes: list[int],
                                       splits_path: str) -> list[str]:
     """Scan completed CSVs in run dir; map back to categories via splits."""
-    data = json.loads(open(splits_path).read())
+    with open(splits_path) as f:
+        data = json.loads(f.read())
     vid_to_cat = {}
     for cat, group in data["splits"].items():
         for vid in group["train_val"]:
