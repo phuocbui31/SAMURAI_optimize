@@ -336,6 +336,29 @@ def aggregate_video(
     pred_root: str,
     commit_hash: str,
 ) -> dict[str, Any]:
+    row, _ = _aggregate_video_with_iou(
+        window_size,
+        video_id,
+        category,
+        split_name,
+        metrics_csv_path,
+        data_root,
+        pred_root,
+        commit_hash,
+    )
+    return row
+
+
+def _aggregate_video_with_iou(
+    window_size: int,
+    video_id: str,
+    category: str,
+    split_name: str,
+    metrics_csv_path: str,
+    data_root: str,
+    pred_root: str,
+    commit_hash: str,
+) -> tuple[dict[str, Any], np.ndarray]:
     df = load_metrics_csv(metrics_csv_path)
     validate_maskmem_bytes(df, metrics_csv_path)
     pred, gt, target_visible = load_predictions_and_gt(
@@ -362,7 +385,7 @@ def aggregate_video(
         "n_frames_iou_below_0.3": int(np.sum(per_frame_iou < 0.3)),
         "n_frames_iou_below_0.5": int(np.sum(per_frame_iou < 0.5)),
     }
-    return row
+    return row, per_frame_iou
 
 
 def write_results_csv(results: list[dict[str, Any]], out_path: str) -> None:
@@ -434,7 +457,7 @@ def main() -> None:
             skipped += 1
             continue
         category, split_name = video_index[video_id]
-        row = aggregate_video(
+        row, per_frame_iou = _aggregate_video_with_iou(
             window_size,
             video_id,
             category,
@@ -446,7 +469,6 @@ def main() -> None:
         )
         results.append(row)
 
-        per_frame_iou = np.asarray(json.loads(row["per_frame_iou"]), dtype=np.float64)
         attribute_masks = load_attribute_masks(
             args.data_root,
             category,

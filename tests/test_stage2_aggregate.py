@@ -247,6 +247,33 @@ def test_stage2_aggregate_writes_zero_active_attribute_rows() -> None:
         assert int(out_of_view["n_frames_iou_below_0.5"]) == 0
 
 
+def test_stage2_aggregate_attribute_metrics_use_exact_iou() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        metrics_dir, data_root, pred_root, out_dir, splits_path = write_fixture_tree(
+            root,
+            pred_text=(
+                "10,10,20,20\n"
+                "26.66665955555745,20,20,20\n"
+                "30,30,20,20\n"
+            ),
+            full_occlusion_text="0,1,0\n",
+            out_of_view_text="0,0,0\n",
+        )
+        write_metric_csv(metrics_dir / "6" / "stage2" / "airplane-5.csv")
+        run_aggregate(metrics_dir, data_root, pred_root, splits_path, out_dir)
+
+        results_df = pd.read_csv(out_dir / "stage2_results.csv")
+        assert json.loads(results_df.iloc[0]["per_frame_iou"])[1] == 0.5
+
+        attr_df = pd.read_csv(out_dir / "stage2_attribute_results.csv")
+        full_occ = attr_df[attr_df["attribute"] == "full_occlusion"].iloc[0].to_dict()
+        assert int(full_occ["n_frames_active"]) == 1
+        assert abs(float(full_occ["mean_iou"]) - 0.5000004) < 1e-9
+        assert abs(float(full_occ["success_0.5"]) - 1.0) < 1e-9
+
+
 test_stage2_aggregate_runtime()
 test_stage2_aggregate_requires_numeric_maskmem_bytes()
 test_stage2_aggregate_writes_zero_active_attribute_rows()
+test_stage2_aggregate_attribute_metrics_use_exact_iou()
