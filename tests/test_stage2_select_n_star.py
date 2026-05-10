@@ -92,7 +92,7 @@ def test_stage2_select_n_star_rejects_partial_coverage() -> None:
     assert candidate_6["coverage_ok"] is False
 
 
-def test_stage2_select_n_star_accepts_better_candidate() -> None:
+def test_stage2_select_n_star_accepts_candidate_by_required_criteria() -> None:
     from scripts.stage2_select_n_star import pivot_by_video, select_n_star
 
     import pandas as pd
@@ -104,9 +104,27 @@ def test_stage2_select_n_star_accepts_better_candidate() -> None:
 
     n_star, rationale = select_n_star(pivot_by_video(pd.DataFrame(rows)))
     assert n_star == 6
-    assert "improvement" in rationale["selected_reason"]
+    assert "Wilcoxon" in rationale["selected_reason"]
+
+
+def test_stage2_select_n_star_rejects_significant_difference() -> None:
+    from scripts.stage2_select_n_star import pivot_by_video, select_n_star
+
+    import pandas as pd
+
+    rows = []
+    for video_idx in range(6):
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 150, "auc": 0.8})
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 6, "auc": 0.81})
+
+    n_star, rationale = select_n_star(pivot_by_video(pd.DataFrame(rows)))
+    assert n_star == 75
+    candidate_6 = next(c for c in rationale["candidates"] if c["window_size"] == 6)
+    assert candidate_6["mean_auc_drop"] < 0
+    assert candidate_6["wilcoxon_p_value"] <= 0.05
 
 
 test_stage2_select_n_star_runtime()
 test_stage2_select_n_star_rejects_partial_coverage()
-test_stage2_select_n_star_accepts_better_candidate()
+test_stage2_select_n_star_accepts_candidate_by_required_criteria()
+test_stage2_select_n_star_rejects_significant_difference()

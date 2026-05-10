@@ -20,6 +20,7 @@ DEFAULT_SENSITIVITY_EPSILONS = [0.001, 0.005, 0.01, 0.02]
 
 
 def parse_args() -> argparse.Namespace:
+    """CLI: --results_csv, --out_dir, --epsilon."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results_csv", required=True, help="Path to stage2_results.csv.")
     parser.add_argument(
@@ -37,6 +38,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_results(csv_path: str) -> pd.DataFrame:
+    """Load stage2_results.csv and return a validated DataFrame."""
     df = pd.read_csv(csv_path)
     required = {"video_id", "window_size", "auc"}
     missing = required - set(df.columns)
@@ -49,6 +51,7 @@ def load_results(csv_path: str) -> pd.DataFrame:
 
 
 def pivot_by_video(df: pd.DataFrame) -> pd.DataFrame:
+    """Pivot to per-video comparison: rows=video_id, cols=window_size, values=auc."""
     pivot = df.pivot_table(
         index="video_id",
         columns="window_size",
@@ -62,6 +65,7 @@ def pivot_by_video(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def wilcoxon_test(candidate_auc: np.ndarray, reference_auc: np.ndarray) -> tuple[float, float]:
+    """Perform Wilcoxon signed-rank test and return (stat, p_value)."""
     candidate = np.asarray(candidate_auc, dtype=np.float64)
     reference = np.asarray(reference_auc, dtype=np.float64)
     mask = np.isfinite(candidate) & np.isfinite(reference)
@@ -165,6 +169,7 @@ def _candidate_report(
 
 
 def select_n_star(pivot: pd.DataFrame, epsilon: float = 0.005) -> tuple[int, dict[str, Any]]:
+    """Select the smallest N matching the Wilcoxon and mean AUC drop criteria."""
     reference_window = _reference_window(pivot)
     candidate_windows = [int(w) for w in pivot.columns if int(w) != reference_window]
     candidate_windows.sort()
@@ -183,20 +188,12 @@ def select_n_star(pivot: pd.DataFrame, epsilon: float = 0.005) -> tuple[int, dic
             continue
         if not report["coverage_ok"]:
             continue
-        statistically_indistinguishable = mean_drop < epsilon and p_value > 0.05
-        better_than_reference = mean_drop < 0.0
-        if statistically_indistinguishable or better_than_reference:
+        if mean_drop < epsilon and p_value > 0.05:
             selected = int(report["window_size"])
-            if better_than_reference:
-                selected_reason = (
-                    f"smallest full-coverage window with mean AUC improvement "
-                    f"{-mean_drop:.6f} versus reference"
-                )
-            else:
-                selected_reason = (
-                    f"smallest full-coverage window with mean AUC drop {mean_drop:.6f} "
-                    f"< epsilon {epsilon:.6f} and Wilcoxon p={p_value:.6f} > 0.05"
-                )
+            selected_reason = (
+                f"smallest full-coverage window with mean AUC drop {mean_drop:.6f} "
+                f"< epsilon {epsilon:.6f} and Wilcoxon p={p_value:.6f} > 0.05"
+            )
             break
 
     if selected is None:
@@ -213,7 +210,6 @@ def select_n_star(pivot: pd.DataFrame, epsilon: float = 0.005) -> tuple[int, dic
             "wilcoxon_p_value": "> 0.05",
             "mean_auc_drop": f"< {epsilon}",
             "coverage": "candidate has the same video coverage as the reference",
-            "better_than_reference": "accepted regardless of p-value when mean_auc_drop < 0",
         },
         "selected_reason": selected_reason,
         "candidates": reports,
@@ -223,9 +219,9 @@ def select_n_star(pivot: pd.DataFrame, epsilon: float = 0.005) -> tuple[int, dic
 
 def sensitivity_analysis(
     pivot: pd.DataFrame,
-    epsilons: list[float] | None = None,
+    epsilons: list[float] = DEFAULT_SENSITIVITY_EPSILONS,
 ) -> dict[str, int]:
-    epsilons = DEFAULT_SENSITIVITY_EPSILONS if epsilons is None else epsilons
+    """Repeat N* selection with different epsilon values."""
     sensitivity: dict[str, int] = {}
     for epsilon in epsilons:
         n_star, _ = select_n_star(pivot, epsilon=epsilon)
@@ -234,6 +230,7 @@ def sensitivity_analysis(
 
 
 def write_selection_json(n_star: int, rationale: dict[str, Any], out_path: str) -> None:
+    """Write N* result and rationale to JSON."""
     os.makedirs(osp.dirname(out_path) or ".", exist_ok=True)
     payload = {
         "n_star": int(n_star),
