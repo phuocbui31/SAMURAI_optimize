@@ -124,7 +124,26 @@ def test_stage2_select_n_star_rejects_significant_difference() -> None:
     assert candidate_6["wilcoxon_p_value"] <= 0.05
 
 
+def test_stage2_select_n_star_requires_reference_150() -> None:
+    from scripts.stage2_select_n_star import pivot_by_video, select_n_star
+
+    import pandas as pd
+
+    rows = []
+    for video_idx in range(4):
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 75, "auc": 0.8})
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 100, "auc": 0.8})
+
+    try:
+        select_n_star(pivot_by_video(pd.DataFrame(rows)))
+    except ValueError as exc:
+        assert "reference window N=150" in str(exc)
+    else:
+        raise AssertionError("select_n_star should reject results missing reference N=150")
+
+
 test_stage2_select_n_star_runtime()
 test_stage2_select_n_star_rejects_partial_coverage()
 test_stage2_select_n_star_accepts_candidate_by_required_criteria()
 test_stage2_select_n_star_rejects_significant_difference()
+test_stage2_select_n_star_requires_reference_150()

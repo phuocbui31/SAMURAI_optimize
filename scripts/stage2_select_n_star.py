@@ -134,7 +134,11 @@ def _wilcoxon_exact_fallback(
 def _reference_window(pivot: pd.DataFrame) -> int:
     if REFERENCE_WINDOW_SIZE in pivot.columns:
         return REFERENCE_WINDOW_SIZE
-    return int(max(pivot.columns))
+    available = [int(w) for w in pivot.columns]
+    raise ValueError(
+        f"Stage 2 N* selection requires reference window N={REFERENCE_WINDOW_SIZE}; "
+        f"available windows: {available}"
+    )
 
 
 def _candidate_report(
