@@ -142,19 +142,22 @@ def _count_prediction_rows(path: str) -> int:
     if not osp.isfile(path):
         return 0
     count = 0
-    with open(path) as f:
-        for line in f:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            parts = stripped.split(",")
-            if len(parts) != 4:
-                return -1
-            try:
-                [float(p) for p in parts]
-            except ValueError:
-                return -1
-            count += 1
+    try:
+        with open(path) as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                parts = stripped.split(",")
+                if len(parts) != 4:
+                    return -1
+                try:
+                    [float(p) for p in parts]
+                except ValueError:
+                    return -1
+                count += 1
+    except (OSError, UnicodeDecodeError):
+        return -1
     return count
 
 

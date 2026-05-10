@@ -202,6 +202,25 @@ def test_completion_rejects_unreadable_metrics_csv_without_crashing():
         assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
 
 
+def test_completion_rejects_unreadable_prediction_txt_without_crashing():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        vid = "airplane-1"
+        bad_pred = pred_root / "6" / f"{vid}.txt"
+
+        write_text(
+            metrics_dir / "6" / "stage2" / f"{vid}.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
+        write_bytes(bad_pred, b"\xff\xfe\x00\x00")
+
+        assert mod._count_prediction_rows(str(bad_pred)) == -1
+        assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
+
+
 def test_run_pending_returns_first_failed_window_rc():
     mod = load_module()
     calls = []
@@ -469,6 +488,7 @@ test_main_inference_pred_dir_ast()
 test_completion_requires_metrics_csv_and_prediction_txt()
 test_completion_requires_valid_maskmem_bytes()
 test_completion_rejects_unreadable_metrics_csv_without_crashing()
+test_completion_rejects_unreadable_prediction_txt_without_crashing()
 test_run_pending_returns_first_failed_window_rc()
 test_completion_allows_only_complete_non_negative_maskmem_bytes()
 test_cleanup_removes_partial_metrics_and_predictions()
