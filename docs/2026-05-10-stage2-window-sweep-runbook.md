@@ -21,6 +21,7 @@ scripts/stage2_run_batch.py
 
 scripts/stage2_aggregate.py
   -> analysis/stage2/stage2_results.csv
+  -> analysis/stage2/stage2_attribute_results.csv
   -> analysis/stage2/stage2_summary.json
 
 scripts/stage2_select_n_star.py
@@ -31,13 +32,19 @@ scripts/stage2_select_n_star.py
 chỉ lấy split `train_val`. Với config hiện tại, mỗi category có 2 video
 `train_val`, tổng cộng 140 video trên 70 categories.
 
-Một cặp `(window_size, video)` được xem là hoàn thành khi cả 2 file sau tồn tại
-và có số frame khớp:
+Một cặp `(window_size, video)` được xem là hoàn thành khi cả 2 file sau tồn tại,
+có số frame khớp, và CSV có cột `maskmem_bytes` hợp lệ:
 
 ```text
 metrics/stage2_lasot/{window_size}/stage2/{video}.csv
 results/stage2/{window_size}/{video}.txt
 ```
+
+`maskmem_bytes` được ghi khi batch runner gọi `main_inference.py` với
+`--log_metrics --log_state_size`. Đây là nguồn đo memory-bank RAM cho Stage 2;
+`ram_mb` chỉ là process RSS và không được dùng cho `membank_ram_*`.
+Các CSV Stage 2 cũ thiếu/empty/non-numeric `maskmem_bytes` được xem là legacy
+incomplete và phải rerun trước khi kết luận về RAM.
 
 Vì vậy có thể chạy nhiều lần theo từng category/window. Lần sau script tự skip
 cặp đã hoàn thành và chỉ chạy phần còn thiếu.
@@ -231,6 +238,7 @@ Khi chạy full 70 categories × 2 train_val videos × 5 window sizes, kỳ vọ
 
 ```text
 stage2_results.csv: 700 rows
+stage2_attribute_results.csv: 1400 rows = 700 video/window rows × 2 attributes
 per window_size: 140 videos
 per category: 10 rows = 2 videos × 5 window sizes
 ```
@@ -292,7 +300,9 @@ rows trong `analysis/stage2_small/stage2_results.csv`.
 Tests nhanh cho Stage 2:
 
 ```bash
-pytest tests/test_stage2_*.py -v
+python3 tests/test_stage2_run_batch.py
+python3 tests/test_stage2_aggregate.py
+python3 tests/test_stage2_select_n_star.py
 ```
 
 Toàn bộ smoke suite:

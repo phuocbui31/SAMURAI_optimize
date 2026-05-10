@@ -676,7 +676,13 @@ Batch runner truyền `--pred_dir results/stage2/{window_size}` vào
 `main_inference.py`, nên prediction txt của các window size không overwrite
 nhau. Resume logic chỉ skip khi cả
 `metrics/stage2_lasot/{window_size}/stage2/{video}.csv` và
-`results/stage2/{window_size}/{video}.txt` đều tồn tại và có số frame khớp.
+`results/stage2/{window_size}/{video}.txt` đều tồn tại, có số frame khớp, và
+CSV có `maskmem_bytes` finite cho mọi frame. Stage 2 batch runner truyền
+`--log_state_size` cùng `--log_metrics`; CSV cũ thiếu `maskmem_bytes` là legacy
+incomplete và phải rerun cho kết luận memory-bank RAM. Aggregator tính
+`membank_ram_*` từ `maskmem_bytes / 1e6`, không dùng process RSS `ram_mb`, và
+ghi thêm `analysis/stage2/stage2_attribute_results.csv` cho `full_occlusion` và
+`out_of_view`.
 
 Smoke nhỏ nếu có `data/small_LaSOT`:
 
@@ -700,8 +706,8 @@ python scripts/stage2_select_n_star.py \
 ```
 
 AST/runtime tests:
-- `tests/test_stage2_run_batch.py` — CLI, resume logic, `--pred_dir` wiring
-- `tests/test_stage2_aggregate.py` — synthetic LaSOT aggregate output/schema
+- `tests/test_stage2_run_batch.py` — CLI, resume logic, `--pred_dir`/`--log_state_size` wiring
+- `tests/test_stage2_aggregate.py` — synthetic LaSOT aggregate output/schema + attribute rows
 - `tests/test_stage2_select_n_star.py` — fake-data N* selection behavior
 
 ## FAQ & Troubleshooting

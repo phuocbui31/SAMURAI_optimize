@@ -120,9 +120,14 @@ python scripts/stage2_select_n_star.py \
 ```
 
 The batch runner invokes `scripts/main_inference.py` with `--optimized`,
-`--no_auto_promote`, `--release_interval=10`, `--evaluate`, and `--log_metrics`.
+`--no_auto_promote`, `--release_interval=10`, `--evaluate`, `--log_metrics`,
+and `--log_state_size`.
 Predictions are written per window under `results/stage2/<window_size>/` via
 `--pred_dir`, so rerunning another window does not overwrite previous outputs.
+Resume only skips a video/window pair when the metrics CSV, prediction TXT, and
+finite per-frame `maskmem_bytes` values are present. Aggregation writes both
+`stage2_results.csv` and `stage2_attribute_results.csv`; memory-bank RAM fields
+come from `maskmem_bytes / 1e6`, not process RSS `ram_mb`.
 
 ## Demo on Custom Video
 
