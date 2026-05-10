@@ -63,9 +63,24 @@ def test_ast():
 
 def test_main_inference_pred_dir_ast():
     src = MAIN_INFERENCE.read_text()
+    tree = ast.parse(src)
     assert "--pred_dir" in src, "main_inference.py must expose --pred_dir"
     assert "args.pred_dir" in src, "main_inference.py must use args.pred_dir"
     assert "results/{exp_name}/{exp_name}_{model_name}" in src, "default pred path unchanged"
+
+    pred_folder_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name) and target.id == "pred_folder"
+    ]
+    assert pred_folder_assignments, "main_inference.py must assign pred_folder"
+    pred_folder_src = ast.get_source_segment(src, pred_folder_assignments[0])
+    assert "args.pred_dir" in pred_folder_src, "pred_folder must use args.pred_dir"
+    assert (
+        "results/{exp_name}/{exp_name}_{model_name}" in pred_folder_src
+    ), "pred_folder default path must remain unchanged"
 
 
 def test_completion_requires_metrics_csv_and_prediction_txt():
