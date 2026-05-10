@@ -198,6 +198,24 @@ def compute_memory_metrics(df: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def compute_num_maskmem(df: pd.DataFrame, csv_path: str) -> int:
+    """Return final maskmem slots: non-cond frames plus the initial cond frame."""
+    error = f"{csv_path}: Stage 2 CSV missing n_non_cond; rerun with --log_state_size"
+    if "n_non_cond" not in df:
+        raise ValueError(error)
+    n_non_cond = _numeric(df, "n_non_cond")
+    invalid = n_non_cond.isna()
+    if invalid.any():
+        bad_rows = ", ".join(str(i) for i in invalid[invalid].index[:5])
+        raise ValueError(f"{error}; invalid n_non_cond at row(s): {bad_rows}")
+    negative = n_non_cond < 0
+    if negative.any():
+        bad_rows = ", ".join(str(i) for i in negative[negative].index[:5])
+        raise ValueError(f"{error}; negative n_non_cond at row(s): {bad_rows}")
+    final_n_non_cond = _finite_last(n_non_cond)
+    return int(final_n_non_cond) + 1
+
+
 def _load_box_txt(path: str) -> np.ndarray:
     if not osp.isfile(path):
         raise FileNotFoundError(path)
@@ -376,6 +394,11 @@ def _aggregate_video_with_iou(
     pred, gt, target_visible = load_predictions_and_gt(
         pred_root, data_root, window_size, category, video_id
     )
+    if len(df) != gt.shape[0]:
+        raise ValueError(
+            f"{video_id}: metrics CSV has {len(df)} frame rows, expected {gt.shape[0]}; "
+            "rerun with --log_metrics"
+        )
     per_frame_iou = compute_per_frame_iou(pred, gt)
     quality = compute_quality_metrics(pred, gt, target_visible)
 
@@ -392,7 +415,7 @@ def _aggregate_video_with_iou(
         "samurai_commit_hash": commit_hash,
         "release_interval": 10,
         "auto_promote_enabled": False,
-        "num_maskmem": 7,
+        "num_maskmem": compute_num_maskmem(df, metrics_csv_path),
         "per_frame_iou": _json_float_list(per_frame_iou),
         "n_frames_iou_below_0.3": int(np.sum(per_frame_iou < 0.3)),
         "n_frames_iou_below_0.5": int(np.sum(per_frame_iou < 0.5)),

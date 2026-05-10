@@ -116,6 +116,7 @@ def test_stage2_select_n_star_rejects_significant_difference() -> None:
     for video_idx in range(6):
         rows.append({"video_id": f"video-{video_idx}", "window_size": 150, "auc": 0.8})
         rows.append({"video_id": f"video-{video_idx}", "window_size": 6, "auc": 0.81})
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 75, "auc": 0.7})
 
     n_star, rationale = select_n_star(pivot_by_video(pd.DataFrame(rows)))
     assert n_star == 75
@@ -142,8 +143,27 @@ def test_stage2_select_n_star_requires_reference_150() -> None:
         raise AssertionError("select_n_star should reject results missing reference N=150")
 
 
+def test_stage2_select_n_star_rejects_missing_fallback_window() -> None:
+    from scripts.stage2_select_n_star import pivot_by_video, select_n_star
+
+    import pandas as pd
+
+    rows = []
+    for video_idx in range(6):
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 150, "auc": 0.8})
+        rows.append({"video_id": f"video-{video_idx}", "window_size": 6, "auc": 0.81})
+
+    try:
+        select_n_star(pivot_by_video(pd.DataFrame(rows)))
+    except ValueError as exc:
+        assert "fallback window N=75" in str(exc)
+    else:
+        raise AssertionError("select_n_star should reject missing fallback window N=75")
+
+
 test_stage2_select_n_star_runtime()
 test_stage2_select_n_star_rejects_partial_coverage()
 test_stage2_select_n_star_accepts_candidate_by_required_criteria()
 test_stage2_select_n_star_rejects_significant_difference()
 test_stage2_select_n_star_requires_reference_150()
+test_stage2_select_n_star_rejects_missing_fallback_window()

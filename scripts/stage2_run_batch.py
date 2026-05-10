@@ -122,7 +122,7 @@ def has_valid_maskmem_bytes(csv_path: str) -> bool:
                     return False
                 if not math.isfinite(maskmem_bytes) or maskmem_bytes < 0:
                     return False
-    except csv.Error:
+    except (OSError, UnicodeDecodeError, csv.Error):
         return False
     return row_count > 0
 
@@ -130,8 +130,11 @@ def has_valid_maskmem_bytes(csv_path: str) -> bool:
 def _count_metric_rows(path: str) -> int:
     if not osp.isfile(path):
         return 0
-    with open(path) as f:
-        nonempty_lines = [line for line in f if line.strip()]
+    try:
+        with open(path) as f:
+            nonempty_lines = [line for line in f if line.strip()]
+    except (OSError, UnicodeDecodeError):
+        return 0
     return max(0, len(nonempty_lines) - 1)
 
 

@@ -201,6 +201,25 @@ def select_n_star(pivot: pd.DataFrame, epsilon: float = 0.005) -> tuple[int, dic
             break
 
     if selected is None:
+        fallback_report = next(
+            (
+                report
+                for report in reports
+                if int(report["window_size"]) == DEFAULT_FALLBACK_WINDOW_SIZE
+            ),
+            None,
+        )
+        if fallback_report is None:
+            available = [int(w) for w in pivot.columns]
+            raise ValueError(
+                f"Stage 2 N* fallback window N={DEFAULT_FALLBACK_WINDOW_SIZE} is missing; "
+                f"available windows: {available}"
+            )
+        if not fallback_report["coverage_ok"]:
+            raise ValueError(
+                f"Stage 2 N* fallback window N={DEFAULT_FALLBACK_WINDOW_SIZE} does not "
+                "have full reference coverage"
+            )
         selected = int(DEFAULT_FALLBACK_WINDOW_SIZE)
         selected_reason = (
             "no candidate satisfied both statistical criteria; using configured fallback"

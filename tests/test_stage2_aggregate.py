@@ -167,6 +167,7 @@ def test_stage2_aggregate_runtime() -> None:
         assert int(row["num_frames"]) == 3
         assert int(row["release_interval"]) == 10
         assert str(row["auto_promote_enabled"]) in {"False", "false"}
+        assert int(row["num_maskmem"]) == 3
         assert row["samurai_commit_hash"] == "abc123"
         assert json.loads(row["per_frame_iou"]) == [1.0, 1.0, 0.0]
 
@@ -278,7 +279,70 @@ def test_stage2_aggregate_attribute_metrics_use_exact_iou() -> None:
         assert abs(float(full_occ["success_0.5"]) - 1.0) < 1e-9
 
 
+def test_stage2_aggregate_rejects_metrics_frame_count_mismatch() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        metrics_dir, data_root, pred_root, out_dir, splits_path = write_fixture_tree(
+            root,
+            pred_text="10,10,20,20\n20,20,20,20\n30,30,20,20\n",
+        )
+        write_text(
+            metrics_dir / "6" / "stage2" / "airplane-5.csv",
+            (
+                "frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,"
+                "vram_peak_mb,n_non_cond,maskmem_bytes,pred_masks_bytes,total_state_bytes\n"
+                "0,0.0,nan,nan,100,90,120,0,1000000,10,20\n"
+                "1,0.5,500.0,2.0,101,91,125,1,2000000,10,20\n"
+            ),
+        )
+
+        result = run_aggregate(
+            metrics_dir,
+            data_root,
+            pred_root,
+            splits_path,
+            out_dir,
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "metrics CSV has 2 frame rows, expected 3" in result.stderr
+        assert "rerun with --log_metrics" in result.stderr
+
+
+def test_stage2_aggregate_derives_num_maskmem_from_final_state_size() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        metrics_dir, data_root, pred_root, out_dir, splits_path = write_fixture_tree(
+            root,
+            pred_text="10,10,20,20\n20,20,20,20\n30,30,20,20\n",
+        )
+        write_text(
+            pred_root / "75" / "airplane-5.txt",
+            "10,10,20,20\n20,20,20,20\n30,30,20,20\n",
+        )
+        write_text(
+            metrics_dir / "75" / "stage2" / "airplane-5.csv",
+            (
+                "frame_idx,wall_time_s,dt_ms,iter_per_sec,ram_mb,vram_alloc_mb,"
+                "vram_peak_mb,n_non_cond,maskmem_bytes,pred_masks_bytes,total_state_bytes\n"
+                "0,0.0,nan,nan,100,90,120,72,1000000,10,20\n"
+                "1,0.5,500.0,2.0,101,91,125,73,2000000,10,20\n"
+                "2,1.0,500.0,2.0,102,92,130,74,3000000,10,20\n"
+            ),
+        )
+
+        run_aggregate(metrics_dir, data_root, pred_root, splits_path, out_dir)
+
+        df = pd.read_csv(out_dir / "stage2_results.csv")
+        row = df.iloc[0].to_dict()
+        assert int(row["window_size"]) == 75
+        assert int(row["num_maskmem"]) == 75
+
+
 test_stage2_aggregate_runtime()
 test_stage2_aggregate_requires_numeric_maskmem_bytes()
 test_stage2_aggregate_writes_zero_active_attribute_rows()
 test_stage2_aggregate_attribute_metrics_use_exact_iou()
+test_stage2_aggregate_rejects_metrics_frame_count_mismatch()
+test_stage2_aggregate_derives_num_maskmem_from_final_state_size()
