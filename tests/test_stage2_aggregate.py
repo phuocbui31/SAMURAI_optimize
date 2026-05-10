@@ -310,7 +310,7 @@ def test_stage2_aggregate_rejects_metrics_frame_count_mismatch() -> None:
         assert "rerun with --log_metrics" in result.stderr
 
 
-def test_stage2_aggregate_derives_num_maskmem_from_window_size() -> None:
+def test_stage2_aggregate_keeps_fixed_num_maskmem() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = pathlib.Path(td)
         metrics_dir, data_root, pred_root, out_dir, splits_path = write_fixture_tree(
@@ -337,7 +337,7 @@ def test_stage2_aggregate_derives_num_maskmem_from_window_size() -> None:
         df = pd.read_csv(out_dir / "stage2_results.csv")
         row = df.iloc[0].to_dict()
         assert int(row["window_size"]) == 75
-        assert int(row["num_maskmem"]) == 76
+        assert int(row["num_maskmem"]) == 7
 
 
 test_stage2_aggregate_runtime()
@@ -345,4 +345,4 @@ test_stage2_aggregate_requires_numeric_maskmem_bytes()
 test_stage2_aggregate_writes_zero_active_attribute_rows()
 test_stage2_aggregate_attribute_metrics_use_exact_iou()
 test_stage2_aggregate_rejects_metrics_frame_count_mismatch()
-test_stage2_aggregate_derives_num_maskmem_from_window_size()
+test_stage2_aggregate_keeps_fixed_num_maskmem()

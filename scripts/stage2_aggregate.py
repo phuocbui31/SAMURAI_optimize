@@ -199,8 +199,8 @@ def compute_memory_metrics(df: pd.DataFrame) -> dict[str, float]:
 
 
 def compute_num_maskmem(window_size: int) -> int:
-    """Return configured maskmem slots: swept non-cond window plus frame-0 cond."""
-    return int(window_size) + 1
+    """Return fixed SAM2/SAMURAI memory bank slots including frame-0 cond."""
+    return 7
 
 
 def _load_box_txt(path: str) -> np.ndarray:

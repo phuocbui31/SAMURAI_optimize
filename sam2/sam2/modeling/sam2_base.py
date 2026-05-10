@@ -679,6 +679,7 @@ class SAM2Base(torch.nn.Module):
         output_dict,
         num_frames,
         track_in_reverse=False,  # tracking in reverse time order (for demo usage)
+        memory_scan_window=None,
     ):
         """Fuse the current frame's visual feature map with previous memory."""
         B = current_vision_feats[-1].size(1)  # batch size on this frame
@@ -734,9 +735,13 @@ class SAM2Base(torch.nn.Module):
                 valid_indices = []
                 if frame_idx > 1:  # Ensure we have previous frames to evaluate
                     non_cond_outputs = output_dict["non_cond_frame_outputs"]
+                    if memory_scan_window is None:
+                        search_start = 1
+                    else:
+                        search_start = max(1, frame_idx - memory_scan_window)
                     for i in range(
-                        frame_idx - 1, 1, -1
-                    ):  # Iterate backwards through previous frames
+                        frame_idx - 1, search_start - 1, -1
+                    ):  # Iterate backwards through previous frames inside scan window
                         # Check if frame exists in non_cond_frame_outputs
                         if i not in non_cond_outputs:
                             continue
@@ -993,6 +998,7 @@ class SAM2Base(torch.nn.Module):
         num_frames,
         track_in_reverse,
         prev_sam_mask_logits,
+        memory_scan_window=None,
     ):
         current_out = {"point_inputs": point_inputs, "mask_inputs": mask_inputs}
         # High-resolution feature maps for the SAM head, reshape (HW)BC => BCHW
@@ -1022,6 +1028,7 @@ class SAM2Base(torch.nn.Module):
                 output_dict=output_dict,
                 num_frames=num_frames,
                 track_in_reverse=track_in_reverse,
+                memory_scan_window=memory_scan_window,
             )
             # apply SAM-style segmentation head
             # here we might feed previously predicted low-res SAM mask logits into the SAM mask decoder,
@@ -1086,6 +1093,7 @@ class SAM2Base(torch.nn.Module):
         run_mem_encoder=True,
         # The previously predicted SAM mask logits (which can be fed together with new clicks in demo).
         prev_sam_mask_logits=None,
+        memory_scan_window=None,
     ):
         current_out, sam_outputs, _, _ = self._track_step(
             frame_idx,
@@ -1099,6 +1107,7 @@ class SAM2Base(torch.nn.Module):
             num_frames,
             track_in_reverse,
             prev_sam_mask_logits,
+            memory_scan_window,
         )
 
         (
