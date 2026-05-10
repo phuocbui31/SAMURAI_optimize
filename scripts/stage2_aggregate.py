@@ -48,6 +48,22 @@ RESULT_COLUMNS = [
     "n_frames_iou_below_0.5",
 ]
 
+ATTRIBUTE_COLUMNS = [
+    "video_id",
+    "category",
+    "split",
+    "window_size",
+    "attribute",
+    "n_frames_active",
+    "mean_iou",
+    "success_0.5",
+    "success_0.75",
+    "n_frames_iou_below_0.3",
+    "n_frames_iou_below_0.5",
+]
+
+ATTRIBUTE_NAMES = ("full_occlusion", "out_of_view")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -150,8 +166,18 @@ def compute_fps_metrics(df: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def validate_maskmem_bytes(df: pd.DataFrame, csv_path: str) -> None:
+    """Require numeric maskmem_bytes for Stage 2 memory-bank RAM."""
+    error = f"{csv_path}: Stage 2 CSV missing maskmem_bytes; rerun with --log_state_size"
+    if "maskmem_bytes" not in df:
+        raise ValueError(error)
+    maskmem_bytes = _numeric(df, "maskmem_bytes").dropna()
+    if maskmem_bytes.empty:
+        raise ValueError(error)
+
+
 def compute_memory_metrics(df: pd.DataFrame) -> dict[str, float]:
-    membank_ram_mb = _numeric(df, "ram_mb")
+    membank_ram_mb = _numeric(df, "maskmem_bytes") / 1e6
     return {
         "membank_ram_peak_mb": _finite_max(membank_ram_mb),
         "membank_ram_mean_mb": _finite_mean(membank_ram_mb),
@@ -210,6 +236,70 @@ def compute_quality_metrics(
     }
 
 
+def load_attribute_masks(
+    data_root: str,
+    category: str,
+    video_id: str,
+    num_frames: int,
+) -> dict[str, np.ndarray]:
+    """Load LaSOT attribute masks where 1 means the attribute is active."""
+    seq_dir = osp.join(data_root, category, video_id)
+    masks: dict[str, np.ndarray] = {}
+    for attribute in ATTRIBUTE_NAMES:
+        path = osp.join(seq_dir, f"{attribute}.txt")
+        if not osp.isfile(path):
+            raise FileNotFoundError(path)
+        values = np.atleast_1d(np.loadtxt(path, delimiter=",", dtype=np.float64))
+        if values.shape[0] != num_frames:
+            raise ValueError(
+                f"{path} has {values.shape[0]} rows, expected {num_frames}"
+            )
+        masks[attribute] = values == 1
+    return masks
+
+
+def compute_attribute_metrics(
+    per_frame_iou: np.ndarray,
+    attribute_masks: dict[str, np.ndarray],
+) -> list[dict[str, Any]]:
+    """Return quality metrics computed on frames where each attribute is active."""
+    rows: list[dict[str, Any]] = []
+    iou = np.asarray(per_frame_iou, dtype=np.float64).reshape(-1)
+    for attribute in ATTRIBUTE_NAMES:
+        active = np.asarray(attribute_masks[attribute], dtype=bool).reshape(-1)
+        if active.shape[0] != iou.shape[0]:
+            raise ValueError(
+                f"{attribute} mask has {active.shape[0]} rows, expected {iou.shape[0]}"
+            )
+        active_iou = iou[active]
+        n_active = int(active_iou.shape[0])
+        if n_active == 0:
+            rows.append(
+                {
+                    "attribute": attribute,
+                    "n_frames_active": 0,
+                    "mean_iou": float("nan"),
+                    "success_0.5": float("nan"),
+                    "success_0.75": float("nan"),
+                    "n_frames_iou_below_0.3": 0,
+                    "n_frames_iou_below_0.5": 0,
+                }
+            )
+            continue
+        rows.append(
+            {
+                "attribute": attribute,
+                "n_frames_active": n_active,
+                "mean_iou": float(np.mean(active_iou)),
+                "success_0.5": float(np.mean(active_iou > 0.5)),
+                "success_0.75": float(np.mean(active_iou > 0.75)),
+                "n_frames_iou_below_0.3": int(np.sum(active_iou < 0.3)),
+                "n_frames_iou_below_0.5": int(np.sum(active_iou < 0.5)),
+            }
+        )
+    return rows
+
+
 def _json_float_list(values: np.ndarray) -> str:
     return json.dumps([round(float(v), 6) for v in values], separators=(",", ":"))
 
@@ -247,6 +337,7 @@ def aggregate_video(
     commit_hash: str,
 ) -> dict[str, Any]:
     df = load_metrics_csv(metrics_csv_path)
+    validate_maskmem_bytes(df, metrics_csv_path)
     pred, gt, target_visible = load_predictions_and_gt(
         pred_root, data_root, window_size, category, video_id
     )
@@ -277,6 +368,12 @@ def aggregate_video(
 def write_results_csv(results: list[dict[str, Any]], out_path: str) -> None:
     os.makedirs(osp.dirname(out_path) or ".", exist_ok=True)
     df = pd.DataFrame(results, columns=RESULT_COLUMNS)
+    df.to_csv(out_path, index=False)
+
+
+def write_attribute_results_csv(results: list[dict[str, Any]], out_path: str) -> None:
+    os.makedirs(osp.dirname(out_path) or ".", exist_ok=True)
+    df = pd.DataFrame(results, columns=ATTRIBUTE_COLUMNS)
     df.to_csv(out_path, index=False)
 
 
@@ -330,33 +427,54 @@ def main() -> None:
     commit_hash = _batch_commit_hash(args.metrics_dir)
 
     results: list[dict[str, Any]] = []
+    attribute_results: list[dict[str, Any]] = []
     skipped = 0
     for window_size, video_id, csv_path in discover_csvs(args.metrics_dir):
         if video_id not in video_index:
             skipped += 1
             continue
         category, split_name = video_index[video_id]
-        results.append(
-            aggregate_video(
-                window_size,
-                video_id,
-                category,
-                split_name,
-                csv_path,
-                args.data_root,
-                args.pred_root,
-                commit_hash,
-            )
+        row = aggregate_video(
+            window_size,
+            video_id,
+            category,
+            split_name,
+            csv_path,
+            args.data_root,
+            args.pred_root,
+            commit_hash,
         )
+        results.append(row)
+
+        per_frame_iou = np.asarray(json.loads(row["per_frame_iou"]), dtype=np.float64)
+        attribute_masks = load_attribute_masks(
+            args.data_root,
+            category,
+            video_id,
+            int(row["num_frames"]),
+        )
+        for attr_row in compute_attribute_metrics(per_frame_iou, attribute_masks):
+            attribute_results.append(
+                {
+                    "video_id": video_id,
+                    "category": category,
+                    "split": split_name,
+                    "window_size": window_size,
+                    **attr_row,
+                }
+            )
 
     if not results:
         raise ValueError(f"No Stage 2 CSVs matched split(s): {include_split}")
 
     results_path = osp.join(args.out_dir, "stage2_results.csv")
+    attribute_results_path = osp.join(args.out_dir, "stage2_attribute_results.csv")
     summary_path = osp.join(args.out_dir, "stage2_summary.json")
     write_results_csv(results, results_path)
+    write_attribute_results_csv(attribute_results, attribute_results_path)
     generate_summary_json(results, summary_path)
     print(f"Wrote {len(results)} rows to {results_path}")
+    print(f"Wrote {len(attribute_results)} rows to {attribute_results_path}")
     print(f"Wrote summary to {summary_path}")
     if skipped:
         print(f"Skipped {skipped} CSVs not present in requested split(s).")
