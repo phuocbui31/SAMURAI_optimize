@@ -102,7 +102,7 @@ def _has_data_csv(path: str) -> bool:
 
 
 def has_valid_maskmem_bytes(csv_path: str) -> bool:
-    """Return True when CSV has at least one finite numeric maskmem_bytes value."""
+    """Return True when every metrics row has finite non-negative maskmem_bytes."""
     if not osp.isfile(csv_path):
         return False
     try:
@@ -110,18 +110,21 @@ def has_valid_maskmem_bytes(csv_path: str) -> bool:
             reader = csv.DictReader(f)
             if not reader.fieldnames or "maskmem_bytes" not in reader.fieldnames:
                 return False
+            row_count = 0
             for row in reader:
+                row_count += 1
                 value = (row.get("maskmem_bytes") or "").strip()
                 if not value:
-                    continue
+                    return False
                 try:
-                    if math.isfinite(float(value)):
-                        return True
+                    maskmem_bytes = float(value)
                 except ValueError:
-                    continue
+                    return False
+                if not math.isfinite(maskmem_bytes) or maskmem_bytes < 0:
+                    return False
     except csv.Error:
         return False
-    return False
+    return row_count > 0
 
 
 def _count_metric_rows(path: str) -> int:
@@ -221,7 +224,7 @@ def build_pending_list(on_disk: list[tuple[str, str, str]],
 
 
 def run_pending(pending: list[tuple[int, str]], data_root: str, metrics_dir: str) -> int:
-    """For each (window_size, video_id), invoke main_inference.py. Return last returncode."""
+    """For each (window_size, video_id), invoke main_inference.py. Return first failure code."""
     if not pending:
         return 0
 
@@ -231,7 +234,7 @@ def run_pending(pending: list[tuple[int, str]], data_root: str, metrics_dir: str
     for window_size, vid in pending:
         by_window[window_size].append(vid)
 
-    last_rc = 0
+    first_failed_rc = 0
     for window_size in sorted(by_window.keys()):
         videos = by_window[window_size]
         pred_dir = osp.join(STAGE2_PRED_ROOT, str(window_size))
@@ -261,13 +264,17 @@ def run_pending(pending: list[tuple[int, str]], data_root: str, metrics_dir: str
                 "--pred_dir", pred_dir,
             ]
             proc = subprocess.run(cmd)
-            last_rc = proc.returncode
-            if last_rc != 0:
-                print(f"WARNING: window_size={window_size} exited with code {last_rc}", file=sys.stderr)
+            if proc.returncode != 0:
+                if first_failed_rc == 0:
+                    first_failed_rc = proc.returncode
+                print(
+                    f"WARNING: window_size={window_size} exited with code {proc.returncode}",
+                    file=sys.stderr,
+                )
         finally:
             os.unlink(pending_path)
 
-    return last_rc
+    return first_failed_rc
 
 
 def _git_commit() -> str:

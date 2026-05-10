@@ -156,12 +156,70 @@ def test_completion_requires_valid_maskmem_bytes():
         assert not mod.has_valid_maskmem_bytes(str(invalid_csv))
         assert not mod.is_video_complete(str(metrics_dir), 8, vid, pred_root=str(pred_root))
 
-        valid_csv = metrics_dir / "9" / "stage2" / f"{vid}.csv"
-        write_text(valid_csv, "frame_idx,maskmem_bytes\n0,\n1,4096\n")
-        write_text(pred_root / "9" / f"{vid}.txt", "1,2,3,4\n1,2,3,4\n")
+        mixed_bad_values = [
+            ("blank", ""),
+            ("non-numeric", "oops"),
+            ("inf", "inf"),
+            ("negative", "-1"),
+        ]
+        for idx, (name, value) in enumerate(mixed_bad_values, start=9):
+            mixed_csv = metrics_dir / str(idx) / "stage2" / f"{vid}.csv"
+            write_text(mixed_csv, f"frame_idx,maskmem_bytes\n0,4096\n1,{value}\n")
+            write_text(pred_root / str(idx) / f"{vid}.txt", "1,2,3,4\n1,2,3,4\n")
+
+            assert not mod.has_valid_maskmem_bytes(str(mixed_csv)), name
+            assert not mod.is_video_complete(
+                str(metrics_dir), idx, vid, pred_root=str(pred_root)
+            ), name
+
+        valid_csv = metrics_dir / "13" / "stage2" / f"{vid}.csv"
+        write_text(valid_csv, "frame_idx,maskmem_bytes\n0,0\n1,4096\n")
+        write_text(pred_root / "13" / f"{vid}.txt", "1,2,3,4\n1,2,3,4\n")
 
         assert mod.has_valid_maskmem_bytes(str(valid_csv))
-        assert mod.is_video_complete(str(metrics_dir), 9, vid, pred_root=str(pred_root))
+        assert mod.is_video_complete(str(metrics_dir), 13, vid, pred_root=str(pred_root))
+
+
+def test_run_pending_returns_first_failed_window_rc():
+    mod = load_module()
+    calls = []
+    returncodes = [5, 0]
+
+    class Proc:
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        return Proc(returncodes.pop(0))
+
+    original_run = mod.subprocess.run
+    try:
+        mod.subprocess.run = fake_run
+        rc = mod.run_pending([(6, "airplane-1"), (7, "bear-1")], "data/LaSOT", "/tmp/metrics")
+    finally:
+        mod.subprocess.run = original_run
+
+    assert rc == 5
+    assert len(calls) == 2
+    assert calls[0][calls[0].index("--keep_window_maskmem=6")] == "--keep_window_maskmem=6"
+    assert calls[1][calls[1].index("--keep_window_maskmem=7")] == "--keep_window_maskmem=7"
+
+
+def test_completion_allows_only_complete_non_negative_maskmem_bytes():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        vid = "airplane-1"
+
+        valid_csv = metrics_dir / "6" / "stage2" / f"{vid}.csv"
+        write_text(valid_csv, "frame_idx,maskmem_bytes\n0,0\n1,4096\n")
+        write_text(pred_root / "6" / f"{vid}.txt", "1,2,3,4\n1,2,3,4\n")
+
+        assert mod.has_valid_maskmem_bytes(str(valid_csv))
+        assert mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
 
 
 def test_cleanup_removes_partial_metrics_and_predictions():
@@ -388,6 +446,8 @@ test_ast()
 test_main_inference_pred_dir_ast()
 test_completion_requires_metrics_csv_and_prediction_txt()
 test_completion_requires_valid_maskmem_bytes()
+test_run_pending_returns_first_failed_window_rc()
+test_completion_allows_only_complete_non_negative_maskmem_bytes()
 test_cleanup_removes_partial_metrics_and_predictions()
 test_cleanup_keeps_pred_only_even_if_malformed()
 test_build_pending_uses_both_outputs()
