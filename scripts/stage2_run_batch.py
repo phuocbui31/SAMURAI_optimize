@@ -97,31 +97,29 @@ def _prediction_txt_path(pred_root: str, window_size: int, video_id: str) -> str
     return osp.join(pred_root, str(window_size), f"{video_id}.txt")
 
 
-def _has_data_csv(path: str) -> bool:
-    return _count_metric_rows(path) > 0
-
-
 def has_valid_maskmem_bytes(csv_path: str) -> bool:
-    """Return True when every metrics row has finite non-negative maskmem_bytes."""
+    """Return True when every metrics row has finite non-negative state-size fields."""
     if not osp.isfile(csv_path):
         return False
     try:
         with open(csv_path, newline="") as f:
             reader = csv.DictReader(f)
-            if not reader.fieldnames or "maskmem_bytes" not in reader.fieldnames:
+            required_fields = {"maskmem_bytes", "n_non_cond"}
+            if not reader.fieldnames or not required_fields.issubset(reader.fieldnames):
                 return False
             row_count = 0
             for row in reader:
                 row_count += 1
-                value = (row.get("maskmem_bytes") or "").strip()
-                if not value:
-                    return False
-                try:
-                    maskmem_bytes = float(value)
-                except ValueError:
-                    return False
-                if not math.isfinite(maskmem_bytes) or maskmem_bytes < 0:
-                    return False
+                for field in required_fields:
+                    value = (row.get(field) or "").strip()
+                    if not value:
+                        return False
+                    try:
+                        numeric_value = float(value)
+                    except ValueError:
+                        return False
+                    if not math.isfinite(numeric_value) or numeric_value < 0:
+                        return False
     except (OSError, UnicodeDecodeError, csv.Error):
         return False
     return row_count > 0
@@ -161,17 +159,62 @@ def _count_prediction_rows(path: str) -> int:
     return count
 
 
+def _count_groundtruth_rows(path: str) -> int:
+    if not osp.isfile(path):
+        return 0
+    try:
+        with open(path) as f:
+            return sum(1 for line in f if line.strip())
+    except (OSError, UnicodeDecodeError):
+        return 0
+
+
+def _count_image_frames(path: str) -> int:
+    if not osp.isdir(path):
+        return 0
+    try:
+        return sum(
+            1
+            for name in os.listdir(path)
+            if name.lower().endswith((".jpg", ".jpeg", ".png"))
+        )
+    except OSError:
+        return 0
+
+
+def _expected_frame_count(
+    data_root: str | None,
+    category: str | None,
+    video_id: str,
+) -> int | None:
+    if not data_root or not category:
+        return None
+    seq_dir = osp.join(data_root, category, video_id)
+    gt_rows = _count_groundtruth_rows(osp.join(seq_dir, "groundtruth.txt"))
+    if gt_rows > 0:
+        return gt_rows
+    image_rows = _count_image_frames(osp.join(seq_dir, "img"))
+    return image_rows if image_rows > 0 else None
+
+
 def is_video_complete(
     metrics_dir: str,
     window_size: int,
     video_id: str,
     pred_root: str = STAGE2_PRED_ROOT,
+    data_root: str | None = None,
+    category: str | None = None,
 ) -> bool:
     """Video is complete iff metrics CSV and prediction txt are both usable."""
     csv = _metrics_csv_path(metrics_dir, window_size, video_id)
     pred = _prediction_txt_path(pred_root, window_size, video_id)
     metric_rows = _count_metric_rows(csv)
     pred_rows = _count_prediction_rows(pred)
+    expected_rows = _expected_frame_count(data_root, category, video_id)
+    if expected_rows is not None and (
+        metric_rows != expected_rows or pred_rows != expected_rows
+    ):
+        return False
     return (
         metric_rows > 0
         and pred_rows == metric_rows
@@ -184,6 +227,7 @@ def cleanup_partial_csvs(
     window_sizes: list[int],
     entries: list[tuple[str, str, str]],
     pred_root: str = STAGE2_PRED_ROOT,
+    data_root: str | None = None,
 ) -> list[tuple[int, str]]:
     """Delete stale Stage 2 outputs for incomplete pairs.
 
@@ -194,14 +238,20 @@ def cleanup_partial_csvs(
     """
     cleaned = []
     for window_size in window_sizes:
-        for vid, _, _ in entries:
+        for vid, cat, _ in entries:
             csv = _metrics_csv_path(metrics_dir, window_size, vid)
             pred = _prediction_txt_path(pred_root, window_size, vid)
-            if is_video_complete(metrics_dir, window_size, vid, pred_root=pred_root):
+            if is_video_complete(
+                metrics_dir,
+                window_size,
+                vid,
+                pred_root=pred_root,
+                data_root=data_root,
+                category=cat,
+            ):
                 continue
             removed = False
             csv_exists = osp.exists(csv)
-            pred_rows = _count_prediction_rows(pred)
             if csv_exists:
                 os.remove(csv)
                 removed = True
@@ -216,13 +266,21 @@ def cleanup_partial_csvs(
 def build_pending_list(on_disk: list[tuple[str, str, str]],
                        metrics_dir: str,
                        window_sizes: list[int],
-                       pred_root: str = STAGE2_PRED_ROOT
+                       pred_root: str = STAGE2_PRED_ROOT,
+                       data_root: str | None = None,
                        ) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
     """Return (pending_jobs, skipped_jobs) as [(window_size, video_id), ...]."""
     pending, skipped = [], []
     for window_size in window_sizes:
-        for vid, _, _ in on_disk:
-            if is_video_complete(metrics_dir, window_size, vid, pred_root=pred_root):
+        for vid, cat, _ in on_disk:
+            if is_video_complete(
+                metrics_dir,
+                window_size,
+                vid,
+                pred_root=pred_root,
+                data_root=data_root,
+                category=cat,
+            ):
                 skipped.append((window_size, vid))
             else:
                 pending.append((window_size, vid))
@@ -319,7 +377,8 @@ def write_manifest(metrics_dir: str, *,
 
 def _categories_with_completed_videos(metrics_dir: str, window_sizes: list[int],
                                       splits_path: str,
-                                      pred_root: str = STAGE2_PRED_ROOT) -> list[str]:
+                                      pred_root: str = STAGE2_PRED_ROOT,
+                                      data_root: str | None = None) -> list[str]:
     """Scan completed Stage 2 outputs in run dir; map back to categories via splits."""
     with open(splits_path) as f:
         data = json.loads(f.read())
@@ -331,7 +390,14 @@ def _categories_with_completed_videos(metrics_dir: str, window_sizes: list[int],
     covered = set()
     for window_size in window_sizes:
         for vid, cat in vid_to_cat.items():
-            if is_video_complete(metrics_dir, window_size, vid, pred_root=pred_root):
+            if is_video_complete(
+                metrics_dir,
+                window_size,
+                vid,
+                pred_root=pred_root,
+                data_root=data_root,
+                category=cat,
+            ):
                 covered.add(cat)
     return sorted(covered)
 
@@ -344,12 +410,18 @@ def main():
     entries = load_splits(args.splits, include_split="train_val")
     entries = filter_categories(entries, categories_filter)
     on_disk, missing = detect_on_disk(entries, args.data_root)
-    pending, skipped = build_pending_list(on_disk, args.metrics_dir, window_sizes)
+    pending, skipped = build_pending_list(
+        on_disk, args.metrics_dir, window_sizes, data_root=args.data_root
+    )
     partial_cleaned = []
 
     if not args.dry_run and pending:
-        partial_cleaned = cleanup_partial_csvs(args.metrics_dir, window_sizes, on_disk)
-        pending, skipped = build_pending_list(on_disk, args.metrics_dir, window_sizes)
+        partial_cleaned = cleanup_partial_csvs(
+            args.metrics_dir, window_sizes, on_disk, data_root=args.data_root
+        )
+        pending, skipped = build_pending_list(
+            on_disk, args.metrics_dir, window_sizes, data_root=args.data_root
+        )
 
     print(f"Splits filtered:    {len(entries)} videos (train_val only)")
     print(f"Window sizes:       {window_sizes}")
@@ -371,7 +443,9 @@ def main():
 
     rc = run_pending(pending, args.data_root, args.metrics_dir)
 
-    covered = _categories_with_completed_videos(args.metrics_dir, window_sizes, args.splits)
+    covered = _categories_with_completed_videos(
+        args.metrics_dir, window_sizes, args.splits, data_root=args.data_root
+    )
     write_manifest(
         args.metrics_dir,
         window_sizes=window_sizes,
