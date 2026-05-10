@@ -352,18 +352,49 @@ or set memory-bank metrics to NaN for thesis results.
 
 **Scenario:** User downloads LaSOT categories incrementally.
 
-**Workflow:**
-```bash
-# 1. Download first batch of categories (e.g., airplane, bear, bird)
-python scripts/download_lasot_category.py --categories airplane,bear,bird
+**Recommended category lifecycle workflow:** Use one category per
+`stage2_run_batch.py` invocation and pass all required window sizes together.
+An external wrapper is responsible for downloading and deleting category data.
+The Stage 2 batch runner must not delete dataset directories.
 
-# 2. Run Stage 2 on available categories
+This avoids downloading the same category once per window size. For each
+category, the runner derives the videos from the locked `train_val` split in
+`splits/splits_v1.json`; callers do not pass individual video ids.
+
+```bash
+# For one downloaded category, run every Stage 2 window size on that category's
+# train_val videos.
 python scripts/stage2_run_batch.py \
   --data_root data/LaSOT \
   --splits splits/splits_v1.json \
-  --metrics_dir metrics/stage2_lasot
+  --metrics_dir metrics/stage2_lasot \
+  --window_sizes 6,7,8,75,150 \
+  --categories airplane
+```
 
-# 3. Aggregate results so far
+**External wrapper responsibilities:**
+- Download one LaSOT category into `data/LaSOT/{category}/`.
+- Call `stage2_run_batch.py --categories {category}` with all target
+  `--window_sizes`.
+- Delete `data/LaSOT/{category}/` only after the batch command exits.
+- Repeat for the next category.
+- Re-download completed categories before final aggregation if their GT and
+  attribute files are no longer present on disk.
+
+**Example cumulative workflow:**
+```bash
+# 1. Download the first category
+python scripts/download_lasot_category.py airplane
+
+# 2. Run all window sizes for that category's train_val videos
+python scripts/stage2_run_batch.py \
+  --data_root data/LaSOT \
+  --splits splits/splits_v1.json \
+  --metrics_dir metrics/stage2_lasot \
+  --window_sizes 6,7,8,75,150 \
+  --categories airplane
+
+# 3. Optional: aggregate results so far while the category data is still present
 python scripts/stage2_aggregate.py \
   --metrics_dir metrics/stage2_lasot \
   --data_root data/LaSOT \
@@ -371,16 +402,19 @@ python scripts/stage2_aggregate.py \
   --splits splits/splits_v1.json \
   --out_dir analysis/stage2
 
-# 4. Download next batch
-python scripts/download_lasot_category.py --categories cat,dog
+# 4. External wrapper may delete data/LaSOT/airplane here.
 
-# 5. Re-run Stage 2 (auto-skips completed videos)
+# 5. Download the next category and repeat.
+python scripts/download_lasot_category.py bear
+
 python scripts/stage2_run_batch.py \
   --data_root data/LaSOT \
   --splits splits/splits_v1.json \
-  --metrics_dir metrics/stage2_lasot
+  --metrics_dir metrics/stage2_lasot \
+  --window_sizes 6,7,8,75,150 \
+  --categories bear
 
-# 6. Re-aggregate (cumulative)
+# 6. Re-aggregate after any number of completed category runs.
 python scripts/stage2_aggregate.py \
   --metrics_dir metrics/stage2_lasot \
   --data_root data/LaSOT \
@@ -395,6 +429,9 @@ python scripts/stage2_aggregate.py \
 - Batch script skips videos only when metrics CSV, window-scoped prediction txt,
   and non-empty `maskmem_bytes` are all present
 - Aggregate script is idempotent (re-run safe)
+- Completion is still tracked at `(window_size, video)`, so a failed category
+  run can be repeated with the same `--categories {category}` command after
+  re-downloading the category.
 
 **Legacy CSV handling:** Existing Stage 2 CSVs produced before this requirement
 may have empty `maskmem_bytes`. They are not valid for memory-bank RAM analysis.
