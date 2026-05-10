@@ -171,9 +171,21 @@ def validate_maskmem_bytes(df: pd.DataFrame, csv_path: str) -> None:
     error = f"{csv_path}: Stage 2 CSV missing maskmem_bytes; rerun with --log_state_size"
     if "maskmem_bytes" not in df:
         raise ValueError(error)
-    maskmem_bytes = _numeric(df, "maskmem_bytes").dropna()
-    if maskmem_bytes.empty:
-        raise ValueError(error)
+    maskmem_bytes = _numeric(df, "maskmem_bytes")
+    invalid = maskmem_bytes.isna()
+    if invalid.any():
+        bad_rows = ", ".join(str(i) for i in invalid[invalid].index[:5])
+        suffix = f"; invalid maskmem_bytes at row(s): {bad_rows}"
+        if int(invalid.sum()) > 5:
+            suffix += f" (+{int(invalid.sum()) - 5} more)"
+        raise ValueError(error + suffix)
+    negative = maskmem_bytes < 0
+    if negative.any():
+        bad_rows = ", ".join(str(i) for i in negative[negative].index[:5])
+        suffix = f"; negative maskmem_bytes at row(s): {bad_rows}"
+        if int(negative.sum()) > 5:
+            suffix += f" (+{int(negative.sum()) - 5} more)"
+        raise ValueError(error + suffix)
 
 
 def compute_memory_metrics(df: pd.DataFrame) -> dict[str, float]:

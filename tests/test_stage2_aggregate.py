@@ -54,6 +54,7 @@ def write_metric_csv(
             [1, 0.5, 500.0, 2.0, 101, 91, 125, 1, 10, 20],
             [2, 1.0, 500.0, 2.0, 102, 92, 130, 2, 10, 20],
         ]
+        assert len(maskmem_values) == len(base_rows)
         for row, maskmem in zip(base_rows, maskmem_values):
             if include_maskmem:
                 row = [*row[:8], maskmem, *row[8:]]
@@ -64,8 +65,8 @@ def write_fixture_tree(
     root: pathlib.Path,
     *,
     pred_text: str,
-    full_occlusion_text: str = "0,1,1\n",
-    out_of_view_text: str = "1,0,0\n",
+    full_occlusion_text: str = "0,1,0\n",
+    out_of_view_text: str = "0,0,1\n",
 ) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
     metrics_dir = root / "metrics"
     data_root = root / "data" / "LaSOT"
@@ -154,9 +155,9 @@ def test_stage2_aggregate_runtime() -> None:
         row = df.iloc[0].to_dict()
         assert row["video_id"] == "airplane-5"
         assert int(row["window_size"]) == 6
-        assert abs(float(row["auc"]) - 0.0) < 1e-9
-        assert abs(float(row["p"]) - 0.0) < 1e-9
-        assert abs(float(row["pnorm"]) - 0.0) < 1e-9
+        assert abs(float(row["auc"]) - (20.0 / 21.0)) < 1e-9
+        assert abs(float(row["p"]) - 1.0) < 1e-9
+        assert abs(float(row["pnorm"]) - 1.0) < 1e-9
         assert "mean_iou" not in df.columns
         assert abs(float(row["fps_mean"]) - 2.0) < 1e-9
         assert abs(float(row["membank_ram_peak_mb"]) - 3.0) < 1e-9
@@ -172,19 +173,19 @@ def test_stage2_aggregate_runtime() -> None:
         attr_df = pd.read_csv(attribute_results_path)
         assert list(attr_df["attribute"]) == ["full_occlusion", "out_of_view"]
         full_occ = attr_df[attr_df["attribute"] == "full_occlusion"].iloc[0].to_dict()
-        assert int(full_occ["n_frames_active"]) == 2
-        assert abs(float(full_occ["mean_iou"]) - 0.5) < 1e-9
-        assert abs(float(full_occ["success_0.5"]) - 0.5) < 1e-9
-        assert abs(float(full_occ["success_0.75"]) - 0.5) < 1e-9
-        assert int(full_occ["n_frames_iou_below_0.3"]) == 1
-        assert int(full_occ["n_frames_iou_below_0.5"]) == 1
+        assert int(full_occ["n_frames_active"]) == 1
+        assert abs(float(full_occ["mean_iou"]) - 1.0) < 1e-9
+        assert abs(float(full_occ["success_0.5"]) - 1.0) < 1e-9
+        assert abs(float(full_occ["success_0.75"]) - 1.0) < 1e-9
+        assert int(full_occ["n_frames_iou_below_0.3"]) == 0
+        assert int(full_occ["n_frames_iou_below_0.5"]) == 0
         out_of_view = attr_df[attr_df["attribute"] == "out_of_view"].iloc[0].to_dict()
         assert int(out_of_view["n_frames_active"]) == 1
-        assert abs(float(out_of_view["mean_iou"]) - 1.0) < 1e-9
-        assert abs(float(out_of_view["success_0.5"]) - 1.0) < 1e-9
-        assert abs(float(out_of_view["success_0.75"]) - 1.0) < 1e-9
-        assert int(out_of_view["n_frames_iou_below_0.3"]) == 0
-        assert int(out_of_view["n_frames_iou_below_0.5"]) == 0
+        assert abs(float(out_of_view["mean_iou"]) - 0.0) < 1e-9
+        assert abs(float(out_of_view["success_0.5"]) - 0.0) < 1e-9
+        assert abs(float(out_of_view["success_0.75"]) - 0.0) < 1e-9
+        assert int(out_of_view["n_frames_iou_below_0.3"]) == 1
+        assert int(out_of_view["n_frames_iou_below_0.5"]) == 1
 
         summary = json.loads(summary_path.read_text())
         assert summary["window_sizes"] == [6]
@@ -197,7 +198,11 @@ def test_stage2_aggregate_requires_numeric_maskmem_bytes() -> None:
     cases = [
         {"include_maskmem": False, "maskmem_values": None},
         {"include_maskmem": True, "maskmem_values": ["", "", ""]},
+        {"include_maskmem": True, "maskmem_values": [1000000, "", 3000000]},
         {"include_maskmem": True, "maskmem_values": ["bad", "bad", "bad"]},
+        {"include_maskmem": True, "maskmem_values": [1000000, "bad", 3000000]},
+        {"include_maskmem": True, "maskmem_values": [1000000, "inf", 3000000]},
+        {"include_maskmem": True, "maskmem_values": [1000000, -1, 3000000]},
     ]
     for case in cases:
         with tempfile.TemporaryDirectory() as td:
