@@ -35,6 +35,7 @@ def test_ast():
         "filter_categories",
         "detect_on_disk",
         "is_video_complete",
+        "has_valid_maskmem_bytes",
         "cleanup_partial_csvs",
         "build_pending_list",
         "run_pending",
@@ -55,6 +56,7 @@ def test_ast():
     assert "--no_auto_promote" in src, "must pass --no_auto_promote flag"
     assert "--evaluate" in src, "must pass --evaluate flag"
     assert "--log_metrics" in src, "must pass --log_metrics flag"
+    assert "--log_state_size" in src, "must collect memory-bank RAM for Stage 2"
 
     assert "--log_maskmem_profile" not in src, "Stage 2 should not use --log_maskmem_profile"
     assert "main_inference_preload.py" not in src, "Stage 2 should not use preload script"
@@ -93,7 +95,10 @@ def test_completion_requires_metrics_csv_and_prediction_txt():
 
         assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
 
-        write_text(metrics_dir / "6" / "stage2" / f"{vid}.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / f"{vid}.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
 
         write_text(pred_root / "6" / f"{vid}.txt", "1,2,3,4\n")
@@ -103,7 +108,10 @@ def test_completion_requires_metrics_csv_and_prediction_txt():
         write_text(pred_root / "7" / f"{vid}.txt", "1,2,3,4\n")
         assert not mod.is_video_complete(str(metrics_dir), 7, vid, pred_root=str(pred_root))
 
-        write_text(metrics_dir / "8" / "stage2" / f"{vid}.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "8" / "stage2" / f"{vid}.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         write_text(pred_root / "8" / f"{vid}.txt", "")
         assert not mod.is_video_complete(str(metrics_dir), 8, vid, pred_root=str(pred_root))
 
@@ -111,9 +119,49 @@ def test_completion_requires_metrics_csv_and_prediction_txt():
         write_text(pred_root / "9" / f"{vid}.txt", "1,2,3,4\n")
         assert not mod.is_video_complete(str(metrics_dir), 9, vid, pred_root=str(pred_root))
 
-        write_text(metrics_dir / "10" / "stage2" / f"{vid}.csv", "header\nrow\nrow\n")
+        write_text(
+            metrics_dir / "10" / "stage2" / f"{vid}.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n1,2048\n",
+        )
         write_text(pred_root / "10" / f"{vid}.txt", "1,2,3,4\n")
         assert not mod.is_video_complete(str(metrics_dir), 10, vid, pred_root=str(pred_root))
+
+
+def test_completion_requires_valid_maskmem_bytes():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        vid = "airplane-1"
+
+        legacy_csv = metrics_dir / "6" / "stage2" / f"{vid}.csv"
+        write_text(legacy_csv, "frame_idx,ram_mb\n0,1200\n")
+        write_text(pred_root / "6" / f"{vid}.txt", "1,2,3,4\n")
+
+        assert not mod.has_valid_maskmem_bytes(str(legacy_csv))
+        assert not mod.is_video_complete(str(metrics_dir), 6, vid, pred_root=str(pred_root))
+
+        empty_csv = metrics_dir / "7" / "stage2" / f"{vid}.csv"
+        write_text(empty_csv, "frame_idx,maskmem_bytes\n0,\n")
+        write_text(pred_root / "7" / f"{vid}.txt", "1,2,3,4\n")
+
+        assert not mod.has_valid_maskmem_bytes(str(empty_csv))
+        assert not mod.is_video_complete(str(metrics_dir), 7, vid, pred_root=str(pred_root))
+
+        invalid_csv = metrics_dir / "8" / "stage2" / f"{vid}.csv"
+        write_text(invalid_csv, "frame_idx,maskmem_bytes\n0,nan\n1,inf\n")
+        write_text(pred_root / "8" / f"{vid}.txt", "1,2,3,4\n1,2,3,4\n")
+
+        assert not mod.has_valid_maskmem_bytes(str(invalid_csv))
+        assert not mod.is_video_complete(str(metrics_dir), 8, vid, pred_root=str(pred_root))
+
+        valid_csv = metrics_dir / "9" / "stage2" / f"{vid}.csv"
+        write_text(valid_csv, "frame_idx,maskmem_bytes\n0,\n1,4096\n")
+        write_text(pred_root / "9" / f"{vid}.txt", "1,2,3,4\n1,2,3,4\n")
+
+        assert mod.has_valid_maskmem_bytes(str(valid_csv))
+        assert mod.is_video_complete(str(metrics_dir), 9, vid, pred_root=str(pred_root))
 
 
 def test_cleanup_removes_partial_metrics_and_predictions():
@@ -128,19 +176,32 @@ def test_cleanup_removes_partial_metrics_and_predictions():
             ("pred-only-1", "pred-only", "train_val"),
             ("header-only-1", "header-only", "train_val"),
             ("empty-pred-1", "empty-pred", "train_val"),
+            ("legacy-1", "legacy", "train_val"),
         ]
 
-        write_text(metrics_dir / "6" / "stage2" / "complete-1.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / "complete-1.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         write_text(pred_root / "6" / "complete-1.txt", "1,2,3,4\n")
 
-        write_text(metrics_dir / "6" / "stage2" / "metric-only-1.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / "metric-only-1.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         write_text(pred_root / "6" / "pred-only-1.txt", "1,2,3,4\n")
 
         write_text(metrics_dir / "6" / "stage2" / "header-only-1.csv", "header\n")
         write_text(pred_root / "6" / "header-only-1.txt", "1,2,3,4\n")
 
-        write_text(metrics_dir / "6" / "stage2" / "empty-pred-1.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / "empty-pred-1.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         write_text(pred_root / "6" / "empty-pred-1.txt", "")
+
+        write_text(metrics_dir / "6" / "stage2" / "legacy-1.csv", "frame_idx,ram_mb\n0,1200\n")
+        write_text(pred_root / "6" / "legacy-1.txt", "1,2,3,4\n")
 
         cleaned = mod.cleanup_partial_csvs(
             str(metrics_dir), [6], entries, pred_root=str(pred_root)
@@ -150,11 +211,12 @@ def test_cleanup_removes_partial_metrics_and_predictions():
             (6, "metric-only-1"),
             (6, "header-only-1"),
             (6, "empty-pred-1"),
+            (6, "legacy-1"),
         ]
         assert (metrics_dir / "6" / "stage2" / "complete-1.csv").is_file()
         assert (pred_root / "6" / "complete-1.txt").is_file()
         assert (pred_root / "6" / "pred-only-1.txt").is_file()
-        for vid, _, _ in (entries[1], entries[3], entries[4]):
+        for vid, _, _ in (entries[1], entries[3], entries[4], entries[5]):
             assert not (metrics_dir / "6" / "stage2" / f"{vid}.csv").exists()
             assert not (pred_root / "6" / f"{vid}.txt").exists()
         assert not (metrics_dir / "6" / "stage2" / "pred-only-1.csv").exists()
@@ -188,15 +250,38 @@ def test_build_pending_uses_both_outputs():
             ("complete-1", "complete", "train_val"),
             ("metric-only-1", "metric-only", "train_val"),
         ]
-        write_text(metrics_dir / "6" / "stage2" / "complete-1.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / "complete-1.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         write_text(pred_root / "6" / "complete-1.txt", "1,2,3,4\n")
-        write_text(metrics_dir / "6" / "stage2" / "metric-only-1.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / "metric-only-1.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
 
         pending, skipped = mod.build_pending_list(
             entries, str(metrics_dir), [6], pred_root=str(pred_root)
         )
         assert skipped == [(6, "complete-1")]
         assert pending == [(6, "metric-only-1")]
+
+
+def test_build_pending_reruns_legacy_csv_without_maskmem_bytes():
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        metrics_dir = base / "metrics"
+        pred_root = base / "preds"
+        entries = [("legacy-1", "legacy", "train_val")]
+        write_text(metrics_dir / "6" / "stage2" / "legacy-1.csv", "frame_idx,ram_mb\n0,1200\n")
+        write_text(pred_root / "6" / "legacy-1.txt", "1,2,3,4\n")
+
+        pending, skipped = mod.build_pending_list(
+            entries, str(metrics_dir), [6], pred_root=str(pred_root)
+        )
+        assert pending == [(6, "legacy-1")]
+        assert skipped == []
 
 
 def test_completed_categories_require_both_outputs():
@@ -217,9 +302,12 @@ def test_completed_categories_require_both_outputs():
 }
 """.strip(),
         )
-        write_text(metrics_dir / "6" / "stage2" / "airplane-1.csv", "header\nrow\n")
+        write_text(
+            metrics_dir / "6" / "stage2" / "airplane-1.csv",
+            "frame_idx,maskmem_bytes\n0,1024\n",
+        )
         write_text(pred_root / "6" / "airplane-1.txt", "1,2,3,4\n")
-        write_text(metrics_dir / "6" / "stage2" / "bear-1.csv", "header\nrow\n")
+        write_text(metrics_dir / "6" / "stage2" / "bear-1.csv", "frame_idx,ram_mb\n0,1200\n")
 
         covered = mod._categories_with_completed_videos(
             str(metrics_dir), [6], str(splits), pred_root=str(pred_root)
@@ -293,14 +381,17 @@ def test_run_pending_passes_pred_dir(monkeypatch=None):
     assert cmd[cmd.index("--run_tag") + 1] == "stage2"
     assert "--pred_dir" in cmd
     assert cmd[cmd.index("--pred_dir") + 1].endswith("results/stage2/6")
+    assert "--log_state_size" in cmd
 
 
 test_ast()
 test_main_inference_pred_dir_ast()
 test_completion_requires_metrics_csv_and_prediction_txt()
+test_completion_requires_valid_maskmem_bytes()
 test_cleanup_removes_partial_metrics_and_predictions()
 test_cleanup_keeps_pred_only_even_if_malformed()
 test_build_pending_uses_both_outputs()
+test_build_pending_reruns_legacy_csv_without_maskmem_bytes()
 test_completed_categories_require_both_outputs()
 test_dry_run_does_not_cleanup_predictions()
 test_run_pending_passes_pred_dir()

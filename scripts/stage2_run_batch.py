@@ -19,8 +19,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime
 import json
+import math
 import os
 import os.path as osp
 import subprocess
@@ -99,6 +101,29 @@ def _has_data_csv(path: str) -> bool:
     return _count_metric_rows(path) > 0
 
 
+def has_valid_maskmem_bytes(csv_path: str) -> bool:
+    """Return True when CSV has at least one finite numeric maskmem_bytes value."""
+    if not osp.isfile(csv_path):
+        return False
+    try:
+        with open(csv_path, newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or "maskmem_bytes" not in reader.fieldnames:
+                return False
+            for row in reader:
+                value = (row.get("maskmem_bytes") or "").strip()
+                if not value:
+                    continue
+                try:
+                    if math.isfinite(float(value)):
+                        return True
+                except ValueError:
+                    continue
+    except csv.Error:
+        return False
+    return False
+
+
 def _count_metric_rows(path: str) -> int:
     if not osp.isfile(path):
         return 0
@@ -138,7 +163,11 @@ def is_video_complete(
     pred = _prediction_txt_path(pred_root, window_size, video_id)
     metric_rows = _count_metric_rows(csv)
     pred_rows = _count_prediction_rows(pred)
-    return metric_rows > 0 and pred_rows == metric_rows
+    return (
+        metric_rows > 0
+        and pred_rows == metric_rows
+        and has_valid_maskmem_bytes(csv)
+    )
 
 
 def cleanup_partial_csvs(
@@ -224,6 +253,7 @@ def run_pending(pending: list[tuple[int, str]], data_root: str, metrics_dir: str
                 "--max_cache_frames=60",
                 "--evaluate",
                 "--log_metrics",
+                "--log_state_size",
                 "--data_root", data_root,
                 "--testing_set", pending_path,
                 "--metrics_dir", osp.join(metrics_dir, str(window_size)),
