@@ -15,6 +15,10 @@ Stage 2 sweeps candidate window sizes `[6, 7, 8, 75, 150]` on train_val set (140
 - Use optimized SAMURAI with `--no_auto_promote` to isolate window size effect
 - Incremental workflow (like Stage 1) to handle partial LaSOT downloads
 - Output per-video summary CSV for statistical analysis and N* selection
+- Memory-bank RAM must be measured from `maskmem_bytes` emitted by
+  `--log_state_size`, not from process RSS (`ram_mb`)
+- Stage 2 must preserve enough per-frame information to report attribute-level
+  quality for `full_occlusion` and `out_of_view`
 
 ---
 
@@ -27,13 +31,14 @@ scripts/stage2_run_batch.py
   ├─ Scan data/LaSOT/ for downloaded categories
   ├─ Filter train_val videos from splits/splits_v1.json
   ├─ For each window_size in [6, 7, 8, 75, 150]:
-  │    ├─ Skip videos already completed (CSV exists)
+  │    ├─ Skip only videos with complete CSV + prediction + maskmem_bytes
   │    ├─ Invoke scripts/main_inference.py with:
   │    │    --optimized
   │    │    --no_auto_promote
   │    │    --keep_window_maskmem={window_size}
   │    │    --release_interval=10  (tight cleanup for accurate memory measurement)
   │    │    --evaluate  (compute LaSOT metrics)
+  │    │    --log_metrics --log_state_size  (FPS/VRAM + memory-bank bytes)
   │    └─ Write per-frame logs + window-scoped predictions
   └─ Done
 
@@ -41,7 +46,10 @@ scripts/stage2_aggregate.py
   ├─ Load per-frame CSVs from metrics/stage2_lasot/{window_size}/stage2/
   ├─ Load window-scoped predictions from results/stage2/{window_size}/
   ├─ Recompute per-video AUC/P/Pnorm from predictions + LaSOT GT
+  ├─ Extract memory-bank RAM from maskmem_bytes / 1e6
+  ├─ Compute per-attribute quality for full_occlusion and out_of_view frames
   ├─ Write consolidated stage2_results.csv
+  ├─ Write consolidated stage2_attribute_results.csv
   └─ Generate summary statistics per window_size
 ```
 
@@ -50,7 +58,7 @@ scripts/stage2_aggregate.py
 ```
 Input:
   - splits/splits_v1.json (train_val videos)
-  - data/LaSOT/{category}/{video}/ (frames + GT)
+  - data/LaSOT/{category}/{video}/ (frames + GT + full_occlusion/out_of_view)
   - analysis/stage1/candidate_window_sizes.json (window sizes)
 
 Intermediate:
@@ -59,6 +67,7 @@ Intermediate:
 
 Output:
   - analysis/stage2/stage2_results.csv (per-video summary, 700 rows)
+  - analysis/stage2/stage2_attribute_results.csv (per-attribute summary)
   - analysis/stage2/stage2_summary.json (aggregate stats per window_size)
 ```
 
@@ -74,7 +83,7 @@ Output:
 1. Load splits and filter train_val videos
 2. Scan disk for available categories
 3. For each window_size, invoke `main_inference.py` with appropriate flags
-4. Skip completed videos (resume logic)
+4. Skip completed videos only when metrics, predictions, and memory-bank bytes are valid
 5. Log batch progress to `metrics/stage2_lasot/_batch_runs.jsonl`
 
 **CLI interface:**
@@ -98,9 +107,11 @@ python scripts/stage2_run_batch.py \
 
 **Resume logic:**
 - Check if `{metrics_dir}/{window_size}/stage2/{video}.csv` exists with >1 line
+- Check if the CSV contains a `maskmem_bytes` column with at least one
+  non-empty numeric value
 - Check if `results/stage2/{window_size}/{video}.txt` exists
-- If both exist → skip
-- If only CSV or prediction exists → treat as partial and re-run that pair
+- If all three checks pass, skip the pair
+- If any check fails, treat the pair as incomplete and rerun it
 
 **Invocation to main_inference.py:**
 ```bash
@@ -113,6 +124,7 @@ python scripts/main_inference.py \
   --max_cache_frames=60 \
   --evaluate \
   --log_metrics \
+  --log_state_size \
   --data_root={data_root} \
   --testing_set={temp_file_with_video_list} \
   --metrics_dir={metrics_dir}/{window_size} \
@@ -124,14 +136,20 @@ python scripts/main_inference.py \
 - `--no_auto_promote` (isolate window size effect)
 - `--release_interval=10` (tight cleanup for accurate memory measurement)
 - `--evaluate` (compute LaSOT metrics inline)
-- `--log_metrics` (capture FPS, RAM, VRAM per-frame for aggregation)
+- `--log_metrics` (capture FPS, process RSS, VRAM per-frame for aggregation)
+- `--log_state_size` (capture `maskmem_bytes`, the authoritative memory-bank
+  RAM measurement for Stage 2)
 - No `--log_maskmem_profile` (Stage 2 doesn't need distance logging)
 
-**Note on intermediate CSVs:** With `--log_metrics` enabled, `main_inference.py`
-writes per-frame metrics to `{metrics_dir}/{window_size}/stage2/{video}.csv`
-because Stage 2 passes `--run_tag stage2`. The aggregator extracts FPS and
-memory metrics from these CSVs. The `--evaluate` flag may still print metrics
-for operator feedback, but the aggregator must not parse stdout.
+**Note on intermediate CSVs:** With `--log_metrics --log_state_size` enabled,
+`main_inference.py` writes per-frame metrics to
+`{metrics_dir}/{window_size}/stage2/{video}.csv` because Stage 2 passes
+`--run_tag stage2`. The aggregator extracts FPS and VRAM from these CSVs, and
+must compute memory-bank RAM from `maskmem_bytes / 1e6`. It must not use
+`ram_mb` as memory-bank RAM because `ram_mb` is process RSS and includes frame
+loading, Python objects, allocator overhead, and other non-memory-bank state.
+The `--evaluate` flag may still print metrics for operator feedback, but the
+aggregator must not parse stdout.
 
 ### 3.2 Main Inference Modifications
 
@@ -140,6 +158,7 @@ for operator feedback, but the aggregator must not parse stdout.
 - `--no_auto_promote` flag
 - `--keep_window_maskmem` parameter
 - `--evaluate` flag (compute LaSOT metrics via `eval_utils.py`)
+- `--log_state_size` flag (writes `maskmem_bytes` through `MetricsLogger`)
 
 **Required modification for Stage 2 aggregation:** add optional `--pred_dir`.
 Default behavior remains unchanged:
@@ -154,6 +173,11 @@ predictions from different window sizes do not overwrite each other.
 
 **Optional enhancement:** Add `--log_stage2_metrics` flag to write per-video summary inline (avoid separate aggregate step). But this adds complexity — better to keep aggregate separate for now.
 
+**Required Stage 2 usage:** Stage 2 batch runs must pass both `--log_metrics`
+and `--log_state_size`. CSVs produced without non-empty `maskmem_bytes` are
+legacy/incomplete for Stage 2 memory analysis and must be rerun before claiming
+memory-bank RAM results.
+
 ### 3.3 Stage 2 Aggregator (`scripts/stage2_aggregate.py`)
 
 **Purpose:** Consolidate intermediate CSVs into final per-video summary.
@@ -165,11 +189,14 @@ predictions from different window sizes do not overwrite each other.
    - Load GT and LaSOT visibility from `data_root`
    - Recompute evaluation metrics (AUC, OP50, OP75, P, Pnorm)
    - Compute FPS (mean across frames)
-   - Extract memory metrics (peak/mean/final membank RAM, peak VRAM)
+   - Extract memory-bank RAM from `maskmem_bytes` (peak/mean/final) and peak VRAM
    - Extract per-frame IoU array
    - Compute failure counts (n_frames_iou_below_0.3, n_frames_iou_below_0.5)
+   - Load `full_occlusion.txt` and `out_of_view.txt` and compute per-attribute
+     quality summaries from per-frame IoU
 3. Write consolidated `stage2_results.csv`
-4. Generate `stage2_summary.json` with aggregate stats per window_size
+4. Write consolidated `stage2_attribute_results.csv`
+5. Generate `stage2_summary.json` with aggregate stats per window_size
 
 **CLI interface:**
 ```bash
@@ -210,6 +237,19 @@ airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,16.3,122.4,45.2,38
 }
 ```
 
+**`stage2_attribute_results.csv`** (per-video, per-window, per-attribute summary):
+```csv
+video_id,category,split,window_size,attribute,n_frames_active,mean_iou,success_0.5,success_0.75,n_frames_iou_below_0.3,n_frames_iou_below_0.5
+airplane-5,airplane,train_val,6,full_occlusion,37,0.421,0.378,0.108,16,23
+airplane-5,airplane,train_val,6,out_of_view,12,0.214,0.167,0.000,9,10
+...
+```
+
+Per-attribute rows are generated for `full_occlusion` and `out_of_view`.
+If an attribute has zero active frames for a video, write a row with
+`n_frames_active=0` and NaN metric fields. This keeps coverage explicit and
+makes downstream grouping predictable.
+
 ---
 
 ## 4. Per-Video Metrics Schema
@@ -231,9 +271,9 @@ airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,16.3,122.4,45.2,38
 | `pnorm` | float | AUC of normalized precision curve over [0, 0.5] | eval_utils |
 | `fps_mean` | float | Average FPS across video | metrics_logger |
 | `total_time_s` | float | Total inference time | metrics_logger |
-| `membank_ram_peak_mb` | float | Peak memory bank RAM | introspection |
-| `membank_ram_mean_mb` | float | Mean memory bank RAM | introspection |
-| `membank_ram_final_mb` | float | Memory bank RAM at last frame | introspection |
+| `membank_ram_peak_mb` | float | Peak memory bank RAM, computed from `maskmem_bytes / 1e6` | `--log_state_size` |
+| `membank_ram_mean_mb` | float | Mean memory bank RAM, computed from `maskmem_bytes / 1e6` | `--log_state_size` |
+| `membank_ram_final_mb` | float | Last-frame memory bank RAM, computed from `maskmem_bytes / 1e6` | `--log_state_size` |
 | `gpu_vram_peak_mb` | float | Peak GPU VRAM | torch.cuda |
 | `num_frames` | int | Video length | video metadata |
 | `run_timestamp` | str | ISO timestamp | runtime |
@@ -268,15 +308,37 @@ airplane-5,airplane,train_val,6,0.682,0.745,0.523,0.812,0.856,16.3,122.4,45.2,38
    each window before the next window overwrites predictions. This mode is only
    for debugging and is not the default Stage 2 workflow.
 
-**From per-frame logs (`{metrics_dir}/{window_size}/stage2/{video}.csv` via `--log_metrics`):**
+**From per-frame logs (`{metrics_dir}/{window_size}/stage2/{video}.csv` via `--log_metrics --log_state_size`):**
 - `fps_mean` (mean of `iter_per_sec` column)
 - `total_time_s` (last `wall_time_s` value)
-- `membank_ram_peak_mb`, `membank_ram_mean_mb`, `membank_ram_final_mb` (from `ram_mb` column)
+- `membank_ram_peak_mb`, `membank_ram_mean_mb`, `membank_ram_final_mb`
+  from `maskmem_bytes / 1e6`
 - `gpu_vram_peak_mb` (max of `vram_peak_mb` column)
 
-**Fallback if `--log_metrics` not enabled:**
-- Compute FPS from total time and num_frames
-- Memory metrics unavailable → set to NaN
+`ram_mb` remains useful as a process-level RSS diagnostic, but it is not a
+valid source for memory-bank RAM. Aggregator implementations must raise a clear
+error when `maskmem_bytes` is missing, empty, or entirely NaN, because such CSVs
+were produced without `--log_state_size`.
+
+**Fallback policy:** Stage 2 production runs must enable
+`--log_metrics --log_state_size`. If these columns are missing, the run is
+incomplete for Stage 2 and must be rerun. Do not silently fall back to `ram_mb`
+or set memory-bank metrics to NaN for thesis results.
+
+**Per-attribute quality data:**
+- Attribute paths: `{data_root}/{category}/{video}/full_occlusion.txt` and
+  `{data_root}/{category}/{video}/out_of_view.txt`.
+- Active masks: `full_occlusion == 1`, `out_of_view == 1`.
+- Metrics are computed from the per-frame IoU array restricted to active
+  attribute frames:
+  - `n_frames_active`
+  - `mean_iou`
+  - `success_0.5 = mean(iou > 0.5)`
+  - `success_0.75 = mean(iou > 0.75)`
+  - `n_frames_iou_below_0.3`
+  - `n_frames_iou_below_0.5`
+- This is a per-frame challenging-scenario analysis, not a replacement for
+  LaSOT video-level AUC/P/Pnorm.
 
 **Derived:**
 - `n_frames_iou_below_0.3 = sum(per_frame_iou < 0.3)`
@@ -330,8 +392,14 @@ python scripts/stage2_aggregate.py \
 ```
 
 **Resume safety:**
-- Batch script skips videos with both CSV + sidecar
+- Batch script skips videos only when metrics CSV, window-scoped prediction txt,
+  and non-empty `maskmem_bytes` are all present
 - Aggregate script is idempotent (re-run safe)
+
+**Legacy CSV handling:** Existing Stage 2 CSVs produced before this requirement
+may have empty `maskmem_bytes`. They are not valid for memory-bank RAM analysis.
+The batch runner should treat such CSVs as incomplete and rerun the affected
+`(window_size, video)` pair when memory-bank RAM is required.
 
 ### 5.2 Parallel Multi-GPU (Optional)
 
@@ -448,7 +516,10 @@ python scripts/stage2_run_batch.py \
 # 3. Aggregate produces stage2_results.csv with 24 rows
 # 4. Schema matches spec
 # 5. per_frame_iou is valid JSON
-# 6. Config fields correct (auto_promote_enabled=False, release_interval=10)
+# 6. maskmem_bytes is present and non-empty in every CSV
+# 7. stage2_results.csv uses maskmem_bytes for membank_ram_* fields
+# 8. stage2_attribute_results.csv contains full_occlusion/out_of_view rows
+# 9. Config fields correct (auto_promote_enabled=False, release_interval=10)
 ```
 
 ### 7.2 AST Tests
@@ -456,12 +527,18 @@ python scripts/stage2_run_batch.py \
 **`tests/test_stage2_run_batch.py`:**
 - Verify CLI flags exist
 - Verify resume logic (skip completed videos)
+- Verify `--log_state_size` is passed with `--log_metrics`
+- Verify completion requires non-empty `maskmem_bytes` in metrics CSV
 - Verify batch log format
 
 **`tests/test_stage2_aggregate.py`:**
 - Verify CSV schema matches Section 4.1
+- Verify `membank_ram_*` is derived from `maskmem_bytes`, not `ram_mb`
+- Verify missing/empty `maskmem_bytes` raises an actionable error
 - Verify per_frame_iou JSON parsing
 - Verify failure counts derivation
+- Verify `stage2_attribute_results.csv` rows and metrics for
+  `full_occlusion` and `out_of_view`
 - Verify idempotent (re-run produces same output)
 
 **`tests/test_stage2_select_n_star.py`:**
@@ -474,9 +551,13 @@ python scripts/stage2_run_batch.py \
 **After smoke test:**
 1. Check AUC values reasonable (0.5 - 0.9 range)
 2. Check FPS values reasonable (10-20 FPS on T4/3090)
-3. Check memory growth bounded (peak RAM < window_size × 0.524 MB/frame)
+3. Check memory growth bounded (peak memory-bank RAM tracks `maskmem_bytes`
+   and stays proportional to window size)
 4. Check per_frame_iou length matches num_frames
-5. Check no NaN in critical fields (auc, fps_mean, membank_ram_peak_mb)
+5. Check `maskmem_bytes` is populated in every per-frame metrics CSV
+6. Check no NaN in critical fields (auc, fps_mean, membank_ram_peak_mb)
+7. Check `stage2_attribute_results.csv` exists and has two attributes per
+   `(window_size, video)` pair
 
 ---
 
@@ -495,6 +576,7 @@ samurai_optimized/
 │   │   └── candidate_window_sizes.json  # INPUT: Window sizes
 │   └── stage2/                      # NEW: Stage 2 outputs
 │       ├── stage2_results.csv       # Per-video summary (700 rows)
+│       ├── stage2_attribute_results.csv  # Per-attribute quality summary
 │       ├── stage2_summary.json      # Aggregate stats
 │       └── n_star_selection.json    # N* result + rationale
 │
@@ -580,11 +662,13 @@ results/
 **Stage 2 complete when:**
 1. ✅ All 140 train_val videos × 5 window_sizes = 700 runs completed
 2. ✅ `stage2_results.csv` has 700 rows with no NaN in critical fields
-3. ✅ Per-frame IoU arrays valid JSON
-4. ✅ Config fields verify (auto_promote_enabled=False, release_interval=10)
-5. ✅ N* selected with clear rationale (Wilcoxon p-value, mean AUC difference)
-6. ✅ Smoke test passes on small_LaSOT
-7. ✅ AST tests pass
+3. ✅ `membank_ram_*` fields are computed from `maskmem_bytes / 1e6`
+4. ✅ Per-frame IoU arrays valid JSON
+5. ✅ `stage2_attribute_results.csv` reports full_occlusion/out_of_view impact
+6. ✅ Config fields verify (auto_promote_enabled=False, release_interval=10)
+7. ✅ N* selected with clear rationale (Wilcoxon p-value, mean AUC difference)
+8. ✅ Smoke test passes on small_LaSOT
+9. ✅ AST tests pass
 
 ---
 
@@ -611,6 +695,14 @@ results/
 **Risk 5: Reference window (N=150) not representative of full-history baseline**
 - **Impact:** N* selection may be biased if N=150 itself drops quality significantly vs N=∞
 - **Mitigation:** Stage 1 shows N=150 has 99.47% frame coverage — very close to full history. Stage 3 will validate N* against true baseline (N=∞) to confirm the choice is sound.
+
+**Risk 6: Memory-bank RAM accidentally measured from process RSS**
+- **Impact:** Thesis memory claims become misleading because `ram_mb` includes
+  image loading, Python objects, allocator overhead, and other non-memory-bank
+  state.
+- **Mitigation:** Stage 2 runs must pass `--log_state_size`; aggregators must
+  derive `membank_ram_*` only from `maskmem_bytes / 1e6` and reject legacy CSVs
+  with missing or empty `maskmem_bytes`.
 
 ---
 
