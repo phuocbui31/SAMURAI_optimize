@@ -1,4 +1,4 @@
-cd samurai/sam2
+cd sam2
 
 uv venv .venv
 
@@ -12,9 +12,7 @@ uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu
 
 uv pip install matplotlib==3.7 tikzplotlib jpeg4py opencv-python lmdb pandas scipy loguru psutil
 
-cd ../..
-
-cd sam2/checkpoints && bash download_ckpts.sh
+cd checkpoints && bash download_ckpts.sh
 
 cd ../..
 
