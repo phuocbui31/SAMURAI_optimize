@@ -34,8 +34,8 @@ parser.add_argument(
 parser.add_argument(
     "--release_interval",
     type=int,
-    default=60,
-    help="Mỗi bao nhiêu frame thì giải phóng frame cũ (mặc định: 60)",
+    default=1,
+    help="Mỗi bao nhiêu frame thì giải phóng frame cũ (mặc định: 1)",
 )
 parser.add_argument(
     "--keep_window_maskmem",
@@ -225,9 +225,7 @@ else:
 
 video_folder = data_root
 pred_folder = (
-    args.pred_dir
-    if args.pred_dir
-    else f"results/{exp_name}/{exp_name}_{model_name}"
+    args.pred_dir if args.pred_dir else f"results/{exp_name}/{exp_name}_{model_name}"
 )
 
 if args.log_metrics:
@@ -237,7 +235,7 @@ if args.log_metrics:
         else osp.join("metrics", f"{exp_name}_{model_name}")
     )
 
-save_to_video = True
+save_to_video = False
 if save_to_video:
     vis_folder = f"visualization/{exp_name}/{model_name}"
     os.makedirs(vis_folder, exist_ok=True)
@@ -338,7 +336,9 @@ try:
                 propagate_kwargs["enable_auto_promote"] = args.enable_auto_promote
                 if args.enable_auto_promote:
                     propagate_kwargs["promote_interval"] = args.promote_interval
-                    propagate_kwargs["promote_search_window"] = args.promote_search_window
+                    propagate_kwargs["promote_search_window"] = (
+                        args.promote_search_window
+                    )
                     propagate_kwargs["max_auto_promoted_cond_frames"] = (
                         args.max_auto_promoted_cond_frames
                     )
@@ -362,9 +362,9 @@ try:
                 mask_to_vis = {}
                 bbox_to_vis = {}
 
-                assert len(masks) == 1 and len(object_ids) == 1, (
-                    "Only one object is supported right now"
-                )
+                assert (
+                    len(masks) == 1 and len(object_ids) == 1
+                ), "Only one object is supported right now"
                 for obj_id, mask in zip(object_ids, masks):
                     mask = mask[0].cpu().numpy()
                     mask = mask > 0.0

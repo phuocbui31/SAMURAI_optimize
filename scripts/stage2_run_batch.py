@@ -37,22 +37,42 @@ SUMMARY_FILENAME = "_batch_runs.jsonl"
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--data_root", required=True,
-                   help="LaSOT-style dataset root (contains <category>/<video_id>/img/).")
-    p.add_argument("--splits", required=True,
-                   help="Path to splits_v1.json built by splits/build_splits.py.")
-    p.add_argument("--metrics_dir", required=True,
-                   help="Output directory for intermediate CSVs (window_size subdirs auto-created).")
-    p.add_argument("--window_sizes", default="6,7,8,75,150",
-                   help="Comma-separated window sizes to sweep. Default: 6,7,8,75,150.")
-    p.add_argument("--categories", default="",
-                   help="Comma-separated category filter. Default: all categories on disk.")
-    p.add_argument("--dry_run", action="store_true",
-                   help="Print pending list and exit; do not invoke main_inference.py.")
+    p.add_argument(
+        "--data_root",
+        required=True,
+        help="LaSOT-style dataset root (contains <category>/<video_id>/img/).",
+    )
+    p.add_argument(
+        "--splits",
+        required=True,
+        help="Path to splits_v1.json built by splits/build_splits.py.",
+    )
+    p.add_argument(
+        "--metrics_dir",
+        required=True,
+        help="Output directory for intermediate CSVs (window_size subdirs auto-created).",
+    )
+    p.add_argument(
+        "--window_sizes",
+        default="6,7,8,75,150",
+        help="Comma-separated window sizes to sweep. Default: 6,7,8,75,150.",
+    )
+    p.add_argument(
+        "--categories",
+        default="",
+        help="Comma-separated category filter. Default: all categories on disk.",
+    )
+    p.add_argument(
+        "--dry_run",
+        action="store_true",
+        help="Print pending list and exit; do not invoke main_inference.py.",
+    )
     return p.parse_args()
 
 
-def load_splits(splits_path: str, include_split: str = "train_val") -> list[tuple[str, str, str]]:
+def load_splits(
+    splits_path: str, include_split: str = "train_val"
+) -> list[tuple[str, str, str]]:
     """Return [(video_id, category, split_name)] filtered by include_split (train_val only)."""
     with open(splits_path) as f:
         data = json.loads(f.read())
@@ -65,23 +85,24 @@ def load_splits(splits_path: str, include_split: str = "train_val") -> list[tupl
     return out
 
 
-def filter_categories(entries: list[tuple[str, str, str]],
-                      categories_filter: list[str]) -> list[tuple[str, str, str]]:
+def filter_categories(
+    entries: list[tuple[str, str, str]], categories_filter: list[str]
+) -> list[tuple[str, str, str]]:
     if not categories_filter:
         return entries
     s = set(categories_filter)
     return [e for e in entries if e[1] in s]
 
 
-def detect_on_disk(entries: list[tuple[str, str, str]],
-                   data_root: str) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
+def detect_on_disk(
+    entries: list[tuple[str, str, str]], data_root: str
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
     """Partition entries into (on_disk, missing) based on <data_root>/<cat>/<video>/img/ existence."""
     on_disk, missing = [], []
     for vid, cat, split_name in entries:
         img_dir = osp.join(data_root, cat, vid, "img")
         if osp.isdir(img_dir) and any(
-            f.lower().endswith((".jpg", ".jpeg", ".png"))
-            for f in os.listdir(img_dir)
+            f.lower().endswith((".jpg", ".jpeg", ".png")) for f in os.listdir(img_dir)
         ):
             on_disk.append((vid, cat, split_name))
         else:
@@ -215,11 +236,7 @@ def is_video_complete(
         metric_rows != expected_rows or pred_rows != expected_rows
     ):
         return False
-    return (
-        metric_rows > 0
-        and pred_rows == metric_rows
-        and has_valid_maskmem_bytes(csv)
-    )
+    return metric_rows > 0 and pred_rows == metric_rows and has_valid_maskmem_bytes(csv)
 
 
 def cleanup_partial_csvs(
@@ -263,12 +280,13 @@ def cleanup_partial_csvs(
     return cleaned
 
 
-def build_pending_list(on_disk: list[tuple[str, str, str]],
-                       metrics_dir: str,
-                       window_sizes: list[int],
-                       pred_root: str = STAGE2_PRED_ROOT,
-                       data_root: str | None = None,
-                       ) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+def build_pending_list(
+    on_disk: list[tuple[str, str, str]],
+    metrics_dir: str,
+    window_sizes: list[int],
+    pred_root: str = STAGE2_PRED_ROOT,
+    data_root: str | None = None,
+) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
     """Return (pending_jobs, skipped_jobs) as [(window_size, video_id), ...]."""
     pending, skipped = [], []
     for window_size in window_sizes:
@@ -287,13 +305,16 @@ def build_pending_list(on_disk: list[tuple[str, str, str]],
     return pending, skipped
 
 
-def run_pending(pending: list[tuple[int, str]], data_root: str, metrics_dir: str) -> int:
+def run_pending(
+    pending: list[tuple[int, str]], data_root: str, metrics_dir: str
+) -> int:
     """For each (window_size, video_id), invoke main_inference.py. Return first failure code."""
     if not pending:
         return 0
 
     # Group by window_size for batch invocation
     from collections import defaultdict
+
     by_window = defaultdict(list)
     for window_size, vid in pending:
         by_window[window_size].append(vid)
@@ -311,21 +332,27 @@ def run_pending(pending: list[tuple[int, str]], data_root: str, metrics_dir: str
 
         try:
             cmd = [
-                sys.executable, MAIN_INFERENCE_SCRIPT,
+                sys.executable,
+                MAIN_INFERENCE_SCRIPT,
                 "--optimized",
                 "--no_auto_promote",
                 f"--keep_window_maskmem={window_size}",
                 "--keep_window_pred_masks=60",
-                "--release_interval=10",
+                "--release_interval=1",
                 "--max_cache_frames=60",
                 "--evaluate",
                 "--log_metrics",
                 "--log_state_size",
-                "--data_root", data_root,
-                "--testing_set", pending_path,
-                "--metrics_dir", osp.join(metrics_dir, str(window_size)),
-                "--run_tag", "stage2",
-                "--pred_dir", pred_dir,
+                "--data_root",
+                data_root,
+                "--testing_set",
+                pending_path,
+                "--metrics_dir",
+                osp.join(metrics_dir, str(window_size)),
+                "--run_tag",
+                "stage2",
+                "--pred_dir",
+                pred_dir,
             ]
             proc = subprocess.run(cmd)
             if proc.returncode != 0:
@@ -351,14 +378,17 @@ def _git_commit() -> str:
         return ""
 
 
-def write_manifest(metrics_dir: str, *,
-                   window_sizes: list[int],
-                   categories_filter: list[str],
-                   jobs_attempted: list[tuple[int, str]],
-                   jobs_skipped: list[tuple[int, str]],
-                   partial_cleaned: list[tuple[int, str]],
-                   categories_covered_so_far: list[str],
-                   subprocess_returncode: int) -> None:
+def write_manifest(
+    metrics_dir: str,
+    *,
+    window_sizes: list[int],
+    categories_filter: list[str],
+    jobs_attempted: list[tuple[int, str]],
+    jobs_skipped: list[tuple[int, str]],
+    partial_cleaned: list[tuple[int, str]],
+    categories_covered_so_far: list[str],
+    subprocess_returncode: int,
+) -> None:
     os.makedirs(metrics_dir, exist_ok=True)
     record = {
         "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -375,10 +405,13 @@ def write_manifest(metrics_dir: str, *,
         f.write(json.dumps(record) + "\n")
 
 
-def _categories_with_completed_videos(metrics_dir: str, window_sizes: list[int],
-                                      splits_path: str,
-                                      pred_root: str = STAGE2_PRED_ROOT,
-                                      data_root: str | None = None) -> list[str]:
+def _categories_with_completed_videos(
+    metrics_dir: str,
+    window_sizes: list[int],
+    splits_path: str,
+    pred_root: str = STAGE2_PRED_ROOT,
+    data_root: str | None = None,
+) -> list[str]:
     """Scan completed Stage 2 outputs in run dir; map back to categories via splits."""
     with open(splits_path) as f:
         data = json.loads(f.read())
