@@ -1,4 +1,4 @@
-uv run scripts/main_inference.py \
+uv run scripts/main_inference_mask.py \
   --optimized \
   --no_auto_promote \
   --keep_window_maskmem=150 \
