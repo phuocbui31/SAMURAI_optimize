@@ -594,32 +594,44 @@ class SAM2VideoPredictor(SAM2Base):
     def get_state_size_stats(self, inference_state) -> dict:
         """Return memory accounting of inference_state output_dict.
 
-        Walks output_dict (cond + non_cond) and output_dict_per_obj. Sums
-        bytes of maskmem_features, maskmem_pos_enc, and pred_masks tensors.
+        Walks output_dict (cond + non_cond). Sums unique tensor storage bytes
+        for maskmem_features, maskmem_pos_enc, and pred_masks tensors.
 
         Returns dict with keys:
         - n_cond: số entry trong cond_frame_outputs
         - n_non_cond: số entry trong non_cond_frame_outputs
-        - maskmem_features_bytes: tổng bytes maskmem_features (chính + per_obj)
+        - maskmem_features_bytes: tổng unique storage bytes maskmem_features
         - maskmem_pos_enc_bytes: tổng bytes maskmem_pos_enc
         - pred_masks_bytes: tổng bytes pred_masks
         - total_bytes: tổng 3 bên trên
 
-        Cost: O(N) per call where N = số entries. Per-obj entries share
-        underlying tensor storage with main entries (sliced view) — bytes
-        are double-counted on purpose; analysis script can divide by
-        (1 + n_obj) if needed.
+        Cost: O(N) per call where N = số entries. Per-obj entries are not
+        walked because output_dict_per_obj stores sliced views sharing the
+        same underlying storage as output_dict. Within output_dict, tensor
+        storage is deduplicated so shared maskmem_pos_enc references are not
+        counted once per frame.
         """
         output_dict = inference_state.get("output_dict", {})
         cond_outputs = output_dict.get("cond_frame_outputs", {})
         non_cond_outputs = output_dict.get("non_cond_frame_outputs", {})
-        per_obj = inference_state.get("output_dict_per_obj", {})
 
         feat_bytes = 0
         pos_bytes = 0
         mask_bytes = 0
+        seen_storages = set()
 
-        def _tensor_bytes(t):
+        def _tensor_storage_key(t):
+            try:
+                storage = t.untyped_storage()
+                return ("storage", storage.data_ptr(), storage.nbytes())
+            except (AttributeError, RuntimeError):
+                return ("object", id(t), None)
+
+        def _tensor_bytes_once(t):
+            key = _tensor_storage_key(t)
+            if key in seen_storages:
+                return 0
+            seen_storages.add(key)
             try:
                 return t.element_size() * t.numel()
             except (AttributeError, RuntimeError):
@@ -632,23 +644,20 @@ class SAM2VideoPredictor(SAM2Base):
                     continue
                 feat = entry.get("maskmem_features")
                 if feat is not None:
-                    feat_bytes += _tensor_bytes(feat)
+                    feat_bytes += _tensor_bytes_once(feat)
                 pos = entry.get("maskmem_pos_enc")
                 if pos is not None:
                     if isinstance(pos, (list, tuple)):
                         for p in pos:
-                            pos_bytes += _tensor_bytes(p)
+                            pos_bytes += _tensor_bytes_once(p)
                     else:
-                        pos_bytes += _tensor_bytes(pos)
+                        pos_bytes += _tensor_bytes_once(pos)
                 pm = entry.get("pred_masks")
                 if pm is not None:
-                    mask_bytes += _tensor_bytes(pm)
+                    mask_bytes += _tensor_bytes_once(pm)
 
         _walk_entries(cond_outputs)
         _walk_entries(non_cond_outputs)
-        for obj_dict in per_obj.values():
-            _walk_entries(obj_dict.get("cond_frame_outputs", {}))
-            _walk_entries(obj_dict.get("non_cond_frame_outputs", {}))
 
         return {
             "n_cond": len(cond_outputs),

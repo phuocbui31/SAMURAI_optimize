@@ -34,10 +34,53 @@ def mask_to_bbox(mask):
 
 def mask_to_contours(mask):
     mask_u8 = mask.astype(np.uint8)
-    contours, _ = cv2.findContours(
-        mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-    )
+    contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return [contour.reshape(-1, 2).astype(int).tolist() for contour in contours]
+
+
+def collect_memory_stats(predictor, state, process, device=None):
+    state_stats = None
+    if hasattr(predictor, "get_state_size_stats"):
+        state_stats = predictor.get_state_size_stats(state)
+
+    if state_stats is None:
+        n_non_cond = None
+        maskmem_bytes = None
+        maskmem_mb = None
+    else:
+        n_non_cond = int(state_stats["n_non_cond"])
+        maskmem_bytes = int(
+            state_stats["maskmem_features_bytes"] + state_stats["maskmem_pos_enc_bytes"]
+        )
+        maskmem_mb = maskmem_bytes / 1e6
+
+    ram_mb = process.memory_info().rss / 1e6
+    vram_alloc_mb = 0.0
+    vram_peak_mb = 0.0
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        try:
+            vram_alloc_mb = torch.cuda.memory_allocated(device) / 1e6
+            vram_peak_mb = torch.cuda.max_memory_allocated(device) / 1e6
+        except RuntimeError as e:
+            print(f"\033[93m[MemoryStats] skip CUDA memory stats: {e}\033[0m")
+
+    return {
+        "n_non_cond": n_non_cond,
+        "maskmem_bytes": maskmem_bytes,
+        "maskmem_mb": round(maskmem_mb, 3) if maskmem_mb is not None else None,
+        "ram_mb": round(ram_mb, 3),
+        "vram_alloc_mb": round(vram_alloc_mb, 3),
+        "vram_peak_mb": round(vram_peak_mb, 3),
+    }
+
+
+def reset_cuda_peak_stats(device=None):
+    if not torch.cuda.is_available() or torch.cuda.device_count() == 0:
+        return
+    try:
+        torch.cuda.reset_peak_memory_stats(device)
+    except RuntimeError as e:
+        print(f"\033[93m[MemoryStats] skip CUDA peak reset: {e}\033[0m")
 
 
 parser = argparse.ArgumentParser(description="SAMURAI Optimized Mask Inference")
@@ -55,8 +98,8 @@ parser.add_argument(
 parser.add_argument(
     "--keep_window_maskmem",
     type=int,
-    default=1000,
-    help="Số frame giữ maskmem_features trong output_dict. Mặc định: 1000",
+    default=150,
+    help="Số frame giữ maskmem_features trong output_dict. Mặc định: 150",
 )
 parser.add_argument(
     "--keep_window_pred_masks",
@@ -138,6 +181,15 @@ parser.add_argument(
         "results/{exp_name}/{exp_name}_{model_name}"
     ),
 )
+parser.add_argument(
+    "--log_memory_stats",
+    action="store_true",
+    default=False,
+    help=(
+        "Ghi thêm memory stats từng frame vào JSONL: maskmem MB, process RAM, "
+        "VRAM allocated và VRAM peak."
+    ),
+)
 args = parser.parse_args()
 
 data_root = args.data_root
@@ -146,7 +198,7 @@ testing_set_path = (
 )
 
 with open(testing_set_path, "r") as f:
-    test_videos = [line for line in f.readlines() if line.strip()]
+    test_videos = [line.strip() for line in f.readlines() if line.strip()]
 
 exp_name = "samurai"
 model_name = args.model_name
@@ -168,6 +220,7 @@ for vid, video in enumerate(test_videos):
     cat_name = video.split("-")[0]
     video_basename = video.strip()
     frame_folder = osp.join(video_folder, cat_name, video_basename, "img")
+    reset_cuda_peak_stats()
 
     num_frames = len(os.listdir(frame_folder))
     print(
@@ -183,6 +236,12 @@ for vid, video in enumerate(test_videos):
     predictor = build_sam2_video_predictor(model_cfg, checkpoint, device="cuda:0")
     output_path = osp.join(pred_folder, f"{video_basename}.jsonl")
     os.makedirs(osp.dirname(output_path), exist_ok=True)
+    if args.log_memory_stats:
+        import psutil
+
+        memory_process = psutil.Process(os.getpid())
+    else:
+        memory_process = None
 
     try:
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
@@ -247,6 +306,10 @@ for vid, video in enumerate(test_videos):
                             "bbox": mask_to_bbox(mask),
                             "contours": mask_to_contours(mask),
                         }
+                        if memory_process is not None:
+                            row["memory"] = collect_memory_stats(
+                                predictor, state, memory_process
+                            )
                         f.write(json.dumps(row, separators=(",", ":")) + "\n")
 
             if hasattr(images_obj, "get_cache_stats"):
@@ -262,3 +325,4 @@ for vid, video in enumerate(test_videos):
         gc.collect()
         torch.clear_autocast_cache()
         torch.cuda.empty_cache()
+        reset_cuda_peak_stats()

@@ -8,4 +8,5 @@ uv run scripts/main_inference_mask.py \
   --data_root data/custom_demo \
   --testing_set data/custom_demo/testing_set.txt \
   --model_name base_plus \
-  --pred_dir outputs/custom_pred
+  --pred_dir outputs/custom_pred \
+  --log_memory_stats

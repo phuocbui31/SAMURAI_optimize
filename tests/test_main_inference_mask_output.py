@@ -26,6 +26,9 @@ for flag in (
     assert flag in src, f"main_inference_mask.py missing CLI flag {flag}"
 
 assert "args.pred_dir" in src, "script must use --pred_dir for output routing"
+assert "line.strip() for line in f.readlines()" in src, (
+    "testing_set entries must be stripped before path construction"
+)
 assert ".jsonl" in src, "mask output must be JSONL"
 assert "json.dumps" in src, "script must write JSON records"
 assert '"bbox"' in src, "JSONL rows must include predicted bbox"
