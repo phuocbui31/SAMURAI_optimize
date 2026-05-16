@@ -203,6 +203,15 @@ parser.add_argument(
     help="Bật ghi maskmem distance profile per-frame ra CSV.",
 )
 parser.add_argument(
+    "--log_state_size",
+    action="store_true",
+    default=False,
+    help=(
+        "Log state size (n_non_cond + maskmem bytes) mỗi frame để debug "
+        "memory growth. Yêu cầu --log_metrics. Overhead ~µs/frame."
+    ),
+)
+parser.add_argument(
     "--metrics_dir",
     type=str,
     default=None,
@@ -222,6 +231,12 @@ parser.add_argument(
     help="Model name",
 )
 args = parser.parse_args()
+
+if args.log_state_size and not args.log_metrics:
+    raise ValueError(
+        "--log_state_size requires --log_metrics to be set "
+        "(state_stats columns are written by MetricsLogger)."
+    )
 
 if args.evaluate:
     from eval_utils import (
@@ -402,7 +417,12 @@ try:
                     except StopIteration:
                         break
                     if metrics_logger is not None:
-                        metrics_logger.log(frame_idx)
+                        state_stats = None
+                        if args.log_state_size and hasattr(
+                            predictor, "get_state_size_stats"
+                        ):
+                            state_stats = predictor.get_state_size_stats(state)
+                        metrics_logger.log(frame_idx, state_stats=state_stats)
                     mask_to_vis = {}
                     bbox_to_vis = {}
 

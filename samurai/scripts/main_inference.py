@@ -29,6 +29,40 @@ def load_lasot_gt(gt_path):
     return prompts
 
 
+import json as _stage1_json
+import subprocess as _stage1_subprocess
+
+
+def _resolve_samurai_commit_hash():
+    """Best-effort: returns current hash via `git rev-parse HEAD`, or empty string."""
+    try:
+        out = _stage1_subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=osp.dirname(osp.dirname(osp.dirname(osp.abspath(__file__)))),
+            stderr=_stage1_subprocess.DEVNULL,
+        )
+        return out.decode().strip()
+    except Exception:
+        return ""
+
+
+def _write_stage1_sidecar(out_dir, video_basename, num_frames, run_tag):
+    """Write {video}_stage1_meta.json with run-time metadata."""
+    import time
+
+    payload = {
+        "video_id": video_basename,
+        "num_frames": num_frames,
+        "run_tag": run_tag,
+        "samurai_commit_hash": _resolve_samurai_commit_hash(),
+        "samurai_run_timestamp": int(time.time()),
+        "inference_mode": "async",
+    }
+    path = osp.join(out_dir, f"{video_basename}_stage1_meta.json")
+    with open(path, "w") as f:
+        _stage1_json.dump(payload, f, indent=2)
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     "--data_root",
@@ -187,6 +221,12 @@ try:
                 video_name=video_basename,
                 output_dir=osp.join(metrics_dir, args.run_tag),
                 num_frames_total=num_frames,
+            )
+            _write_stage1_sidecar(
+                out_dir=osp.join(metrics_dir, args.run_tag),
+                video_basename=video_basename,
+                num_frames=num_frames,
+                run_tag=args.run_tag,
             )
 
         try:

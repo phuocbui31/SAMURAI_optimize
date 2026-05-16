@@ -1,0 +1,11 @@
+uv run scripts/main_inference.py \
+  --optimized \
+  --no_auto_promote \
+  --keep_window_maskmem=150 \
+  --keep_window_pred_masks=60 \
+  --release_interval=1 \
+  --max_cache_frames=60 \
+  --data_root data/custom_demo \
+  --testing_set data/custom_demo/testing_set.txt \
+  --model_name base_plus \
+  --pred_dir outputs/custom_pred

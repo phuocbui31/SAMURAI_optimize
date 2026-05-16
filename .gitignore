@@ -187,3 +187,5 @@ analysis/*
 !analysis/stage1/
 analysis/stage1/*
 !analysis/stage1/candidate_window_sizes.json
+
+outputs/

@@ -10,6 +10,23 @@ import ast
 import pathlib
 
 
+def _has_get_state_size_hasattr(src):
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (isinstance(node.func, ast.Name) and node.func.id == "hasattr"):
+            continue
+        if len(node.args) < 2:
+            continue
+        if (
+            isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "get_state_size_stats"
+        ):
+            return True
+    return False
+
+
 # -------- Predictor: get_state_size_stats method --------
 predictor_path = pathlib.Path("sam2/sam2/sam2_video_predictor.py")
 predictor_src = predictor_path.read_text()
@@ -174,3 +191,17 @@ assert (
     'hasattr(predictor, "get_state_size_stats")' in samurai_cli_src
     or "hasattr(predictor, 'get_state_size_stats')" in samurai_cli_src
 ), "samurai get_state_size_stats() call must be hasattr-gated"
+
+
+# -------- samurai/ main_inference_preload.py: same --log_state_size wiring --------
+samurai_preload_cli_path = pathlib.Path("samurai/scripts/main_inference_preload.py")
+samurai_preload_cli_src = samurai_preload_cli_path.read_text()
+
+assert "--log_state_size" in samurai_preload_cli_src
+assert "args.log_state_size" in samurai_preload_cli_src
+assert "log_state_size" in samurai_preload_cli_src and "log_metrics" in samurai_preload_cli_src
+assert "get_state_size_stats" in samurai_preload_cli_src
+assert "state_stats=" in samurai_preload_cli_src
+assert _has_get_state_size_hasattr(
+    samurai_preload_cli_src
+), "samurai preload get_state_size_stats() call must be hasattr-gated"

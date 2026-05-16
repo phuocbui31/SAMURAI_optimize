@@ -17,9 +17,14 @@ def test_ast():
         assert fn in names, f"missing function {fn} (have {names})"
     for flag in ("--data_root", "--splits", "--metrics_dir", "--run_tag",
                  "--include_split", "--categories", "--dry_run",
-                 "--model_path", "--model_cfg"):
+                 "--model_path", "--model_cfg", "--inference_mode",
+                 "--log_metrics", "--log_state_size"):
         assert flag in src, f"missing flag {flag}"
     assert "main_inference_preload.py" in src, "must invoke preload script"
+    assert "main_inference.py" in src, "must invoke async script"
+    assert "PRELOAD_SCRIPT" in src and "ASYNC_SCRIPT" in src
+    assert "--log_metrics" in src, "must forward --log_metrics"
+    assert "--log_state_size" in src, "must forward --log_state_size"
     assert "subprocess" in src, "must use subprocess module"
 
 
