@@ -10,17 +10,17 @@ def parse_args():
     )
     parser.add_argument(
         "--img_dir",
-        default="data/custom_demo/puskas_award_son_heung_min/puskas_award_son_heung_min-1/img",
+        default="data/custom_demo/NFL_session/NFL_session-1/img",
         help="Directory containing 00000001.jpg-style frames.",
     )
     parser.add_argument(
         "--pred_path",
-        default="outputs/custom_pred/puskas_award_son_heung_min-1.jsonl",
+        default="outputs/custom_pred/NFL_session-1.jsonl",
         help="Prediction path: JSONL from main_inference_mask.py or legacy bbox TXT.",
     )
     parser.add_argument(
         "--out_path",
-        default="outputs/puskas_award_son_heung_min-1_mask_bbox.mp4",
+        default="outputs/NFL_session-1_mask_bbox.mp4",
         help="Output mp4 path.",
     )
     parser.add_argument("--fps", type=float, default=30, help="Output video FPS.")
